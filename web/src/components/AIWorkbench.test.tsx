@@ -24,11 +24,13 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
       onFollowUp={vi.fn()}
       onNavigateReference={vi.fn()}
       onPublishComments={vi.fn()}
+      onRunTests={vi.fn()}
       onSetReviewSubmissionBody={vi.fn()}
       onSetReviewSubmissionEvent={vi.fn()}
       pendingCommentBody={null}
       selection={null}
       submission={{ body: "", event: null }}
+      testRuns={[]}
       threadError={null}
       threadNavigationRequest={null}
       threads={[]}
@@ -75,6 +77,54 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
+  });
+
+  it("starts a local test run and shows the latest result", async () => {
+    const onRunTests = vi.fn().mockResolvedValue(undefined);
+    renderWorkbench({
+      onRunTests,
+      testRuns: [
+        {
+          id: "test_1",
+          status: "failed",
+          command: "npm --prefix web test -- --run",
+          exit_code: 1,
+          stdout: "one test failed",
+          stderr: "AssertionError",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:01Z",
+        },
+      ],
+    });
+
+    expect(screen.getByRole("region", { name: "Test runs" })).toBeInTheDocument();
+    expect(screen.getByText("npm --prefix web test -- --run")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("exit 1")).toBeInTheDocument();
+    expect(screen.getByText(/one test failed/)).toBeInTheDocument();
+    expect(screen.getByText(/AssertionError/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+
+    expect(onRunTests).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the test button while a test run is active", () => {
+    renderWorkbench({
+      testRuns: [
+        {
+          id: "test_1",
+          status: "running",
+          command: "npm --prefix web test -- --run",
+          stdout: "",
+          stderr: "",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:01Z",
+        },
+      ],
+    });
+
+    expect(screen.getByRole("button", { name: "Running" })).toBeDisabled();
   });
 
   it("renders and deletes local PR comment drafts", async () => {
@@ -230,11 +280,13 @@ describe("AIWorkbench", () => {
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onRunTests={vi.fn()}
         onSetReviewSubmissionBody={vi.fn()}
         onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         submission={{ body: "", event: null }}
+        testRuns={[]}
         threadError={null}
         threadNavigationRequest={null}
         threads={[
@@ -339,11 +391,13 @@ describe("AIWorkbench", () => {
         onFollowUp={onFollowUp}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onRunTests={vi.fn()}
         onSetReviewSubmissionBody={vi.fn()}
         onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         submission={{ body: "", event: null }}
+        testRuns={[]}
         threadError={null}
         threadNavigationRequest={null}
         threads={[thread]}
@@ -399,11 +453,13 @@ describe("AIWorkbench", () => {
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onRunTests={vi.fn()}
         onSetReviewSubmissionBody={vi.fn()}
         onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         submission={{ body: "", event: null }}
+        testRuns={[]}
         threadError={null}
         threadNavigationRequest={{ threadId: "thr_1", requestId: 1 }}
         threads={[thread]}

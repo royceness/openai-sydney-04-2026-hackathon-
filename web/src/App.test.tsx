@@ -50,6 +50,16 @@ vi.mock("./api", () => ({
     threads: [],
     comments: [],
     submission: { body: "", event: null },
+    test_runs: [],
+  })),
+  createTestRun: vi.fn(async () => ({
+    id: "test_1",
+    status: "queued" as const,
+    command: "npm --prefix web test -- --run",
+    stdout: "",
+    stderr: "",
+    created_at: "2026-04-29T00:00:00Z",
+    updated_at: "2026-04-29T00:00:00Z",
   })),
   createThread: vi.fn(),
   deleteComment: vi.fn(async () => ({ comment_id: "draft_1", status: "deleted" as const })),
@@ -129,11 +139,13 @@ vi.mock("./components/AIWorkbench", () => ({
     commentError,
     comments,
     onPublishComments,
+    onRunTests,
     pendingCommentBody,
   }: {
     commentError: string | null;
     comments: DraftComment[];
     onPublishComments: (body: string, event: ReviewSubmission["event"]) => Promise<void>;
+    onRunTests: () => Promise<void>;
     pendingCommentBody: string | null;
     threads: ReviewThread[];
   }) => (
@@ -142,6 +154,9 @@ vi.mock("./components/AIWorkbench", () => ({
       {commentError ? <div>Comment error: {commentError}</div> : null}
       <button onClick={() => void onPublishComments("", null)} type="button">
         Publish comments
+      </button>
+      <button onClick={() => void onRunTests()} type="button">
+        Run tests
       </button>
       {comments.map((comment) => (
         <div key={comment.id}>
@@ -244,6 +259,39 @@ describe("App draft comments", () => {
     expect(await screen.findByText("Status: failed")).toBeInTheDocument();
     expect(screen.getByText("Comment error: GitHub rejected the line")).toBeInTheDocument();
     expect(screen.getByText("Comment failed: GitHub rejected the line")).toBeInTheDocument();
+  });
+
+  it("starts a test run and refreshes the review session", async () => {
+    const api = await import("./api");
+    vi.mocked(api.getReview).mockResolvedValueOnce({
+      id: "rev_1",
+      pr,
+      files,
+      comments: [],
+      threads: [],
+      submission: { body: "", event: null },
+      test_runs: [
+        {
+          id: "test_1",
+          status: "running",
+          command: "npm --prefix web test -- --run",
+          stdout: "",
+          stderr: "",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:01Z",
+        },
+      ],
+      created_at: "2026-04-29T00:00:00Z",
+      updated_at: "2026-04-29T00:00:01Z",
+    });
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Run tests"));
+
+    expect(api.createTestRun).toHaveBeenCalledWith("rev_1");
+    expect(api.getReview).toHaveBeenCalledWith("rev_1");
   });
 
   it("announces only non-init queued or running threads that become terminal", async () => {

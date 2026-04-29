@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from pathlib import Path
 
 import httpx
@@ -211,6 +212,69 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
 
     assert diff_response.status_code == 200
     assert diff_response.json() == {"file_path": "src/review/diagram.ts", "diff": "@@ -1 +1 @@\n-old\n+new"}
+
+
+def test_create_test_run_executes_configured_command_in_checkout(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "checkout"
+    repo_path.mkdir()
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "")
+    monkeypatch.setenv("REVIEW_ROOM_TEST_COMMAND", f"{sys.executable} -c \"import pathlib; print(pathlib.Path.cwd().name)\"")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutServiceAtPath(repo_path))
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    assert create_response.status_code == 200
+
+    response = client.post("/api/reviews/rev_acme_review_room_247/test-runs")
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["status"] == "queued"
+    assert created["command"].startswith(sys.executable)
+    session = client.get("/api/reviews/rev_acme_review_room_247").json()
+    assert session["test_runs"][0]["status"] == "passed"
+    assert session["test_runs"][0]["exit_code"] == 0
+    assert session["test_runs"][0]["stdout"] == "checkout\n"
+
+
+def test_create_test_run_persists_failed_exit_code(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "checkout"
+    repo_path.mkdir()
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "")
+    monkeypatch.setenv("REVIEW_ROOM_TEST_COMMAND", f"{sys.executable} -c \"import sys; print('boom'); sys.exit(3)\"")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutServiceAtPath(repo_path))
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    assert create_response.status_code == 200
+
+    response = client.post("/api/reviews/rev_acme_review_room_247/test-runs")
+
+    assert response.status_code == 200
+    session = client.get("/api/reviews/rev_acme_review_room_247").json()
+    assert session["test_runs"][0]["status"] == "failed"
+    assert session["test_runs"][0]["exit_code"] == 3
+    assert session["test_runs"][0]["stdout"] == "boom\n"
+
+
+def test_create_test_run_requires_configured_command(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "checkout"
+    repo_path.mkdir()
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "")
+    monkeypatch.delenv("REVIEW_ROOM_TEST_COMMAND", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutServiceAtPath(repo_path))
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    assert create_response.status_code == 200
+
+    response = client.post("/api/reviews/rev_acme_review_room_247/test-runs")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "REVIEW_ROOM_TEST_COMMAND is required to run tests"
 
 
 def test_create_review_starts_default_init_threads(tmp_path: Path, monkeypatch) -> None:
