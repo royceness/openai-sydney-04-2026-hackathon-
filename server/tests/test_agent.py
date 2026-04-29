@@ -24,7 +24,7 @@ async def test_codex_agent_reuses_one_app_server_process(monkeypatch, tmp_path: 
     created_processes: list[FakeProcess] = []
 
     async def fake_create_subprocess_exec(*args, **kwargs):
-        process = FakeProcess()
+        process = FakeProcess(limit=kwargs.get("limit"))
         created_processes.append(process)
         return process
 
@@ -37,6 +37,7 @@ async def test_codex_agent_reuses_one_app_server_process(monkeypatch, tmp_path: 
     assert first.markdown == "First response"
     assert second.markdown == "Second response"
     assert len(created_processes) == 1
+    assert created_processes[0].limit == 10 * 1024 * 1024
     sent_methods = [message["method"] for message in created_processes[0].stdin.messages]
     assert sent_methods == [
         "initialize",
@@ -52,7 +53,7 @@ async def test_codex_agent_can_start_before_first_thread(monkeypatch, tmp_path: 
     created_processes: list[FakeProcess] = []
 
     async def fake_create_subprocess_exec(*args, **kwargs):
-        process = FakeProcess()
+        process = FakeProcess(limit=kwargs.get("limit"))
         created_processes.append(process)
         return process
 
@@ -71,7 +72,7 @@ async def test_codex_agent_can_start_before_first_thread(monkeypatch, tmp_path: 
 @pytest.mark.asyncio
 async def test_codex_agent_forwards_deltas(monkeypatch, tmp_path: Path) -> None:
     async def fake_create_subprocess_exec(*args, **kwargs):
-        return FakeProcess()
+        return FakeProcess(limit=kwargs.get("limit"))
 
     monkeypatch.setattr("review_room.agent.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
     agent = CodexAppServerAgent(command="codex")
@@ -125,11 +126,12 @@ class FakeStderr:
 
 
 class FakeProcess:
-    def __init__(self) -> None:
+    def __init__(self, limit: int | None = None) -> None:
         self.stdin = FakeStdin()
         self.stdout = FakeStdout()
         self.stderr = FakeStderr()
         self.returncode = None
+        self.limit = limit
 
     def terminate(self) -> None:
         self.returncode = 0

@@ -42,6 +42,7 @@ class CodexAppServerAgent:
     model = "gpt-5.3-codex-spark"
     service_tier = "fast"
     reasoning_effort = "low"
+    stdio_limit = 10 * 1024 * 1024
 
     def __init__(self, command: str | None = None) -> None:
         self.command = command or os.environ.get("REVIEW_ROOM_CODEX_COMMAND", "codex")
@@ -104,6 +105,7 @@ class CodexAppServerAgent:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=self.stdio_limit,
         )
         self._next_id = 1
         await self._request(
