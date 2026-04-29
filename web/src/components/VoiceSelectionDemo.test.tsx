@@ -8,6 +8,7 @@ import {
   getThreadTextByLineRange,
   listDraftCommentsForVoice,
   listThreadSummariesForVoice,
+  parseVoiceCodeReference,
   readInitialAnalysisThreadForVoice,
   resolveFileNavigation,
   resolveFollowUpThread,
@@ -128,6 +129,7 @@ function renderVoiceSelectionDemo({
   onEditComment = vi.fn(() => Promise.resolve({ status: "updated" as const })),
   onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
+  onNavigateReference = vi.fn(),
   onNavigateThread = vi.fn(),
   pr = pullRequestInfo,
   onSetReviewSubmissionBody = vi.fn(async (body: string) => ({ body, event: null })),
@@ -162,6 +164,7 @@ function renderVoiceSelectionDemo({
   ) => Promise<{ status: "updated" | "not-found" | "empty" | "failed"; message?: string }>;
   onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
+  onNavigateReference?: (reference: { filePath: string; startLine: number; endLine?: number }) => void;
   onNavigateThread?: (threadId: string) => void;
   pr?: PullRequestInfo;
   onSetReviewSubmissionBody?: (body: string) => Promise<{ body: string; event: "comment" | "approve" | "request_changes" | null }>;
@@ -205,6 +208,7 @@ function renderVoiceSelectionDemo({
       onEditComment={onEditComment}
       onFollowUp={onFollowUp}
       onNavigateFile={onNavigateFile}
+      onNavigateReference={onNavigateReference}
       onNavigateThread={onNavigateThread}
       pr={pr}
       onSetReviewSubmissionBody={onSetReviewSubmissionBody}
@@ -253,6 +257,24 @@ describe("VoiceSelectionDemo", () => {
       ok: true,
       filePath: "docs/foo.txt",
     });
+  });
+
+  it("parses code references from thread text", () => {
+    expect(parseVoiceCodeReference("src/review/diagram.ts:L201-L208")).toEqual({
+      filePath: "src/review/diagram.ts",
+      startLine: 201,
+      endLine: 208,
+    });
+    expect(parseVoiceCodeReference("docs/foo.txt:L3")).toEqual({
+      filePath: "docs/foo.txt",
+      startLine: 3,
+    });
+    expect(parseVoiceCodeReference("Please open `src/review/diagram.ts:L201-L208`.")).toEqual({
+      filePath: "src/review/diagram.ts",
+      startLine: 201,
+      endLine: 208,
+    });
+    expect(parseVoiceCodeReference("docs/foo.txt")).toBeNull();
   });
 
   it("builds voice page context from selected code and focused thread", () => {
@@ -637,6 +659,9 @@ describe("VoiceSelectionDemo", () => {
     expect(options.instructions).toContain("one or two short sentences");
     expect(options.instructions).toContain("concise and precise");
     expect(options.instructions).toContain("For UI commands, call the matching tool and do not add a spoken confirmation");
+    expect(options.instructions).toContain('When the user asks to show, open, find, or take them to a Mermaid diagram or existing diagram, first call search_review_threads with query "mermaid"');
+    expect(options.instructions).toContain('If that finds no matches, call search_review_threads with query "diagram"');
+    expect(options.instructions).toContain("If a matching thread is found, call navigate_review_thread for the best matching thread");
     expect(options.instructions).toContain("Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread");
     expect(options.instructions).toContain("If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next");
     expect(options.instructions).toContain("For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases");
@@ -1110,5 +1135,67 @@ describe("VoiceSelectionDemo", () => {
 
     navigateFile.execute({ action: "file", filePath: "diagram.ts" });
     expect(onNavigateFile).toHaveBeenLastCalledWith("src/review/diagram.ts");
+  });
+
+  it("routes file navigation with a line number through code reference navigation", async () => {
+    const onNavigateFile = vi.fn();
+    const onNavigateReference = vi.fn();
+    const options = renderVoiceSelectionDemo({ onNavigateFile, onNavigateReference });
+    const navigateFile = options.tools.find((tool) => tool.name === "navigate_file");
+    if (!navigateFile) {
+      throw new Error("Expected navigate file voice tool");
+    }
+
+    expect(navigateFile.execute({ action: "file", filePath: "src/review/diagram.ts:L201-L202" })).toEqual({
+      ok: true,
+      reference: {
+        filePath: "src/review/diagram.ts",
+        startLine: 201,
+        endLine: 202,
+      },
+    });
+    expect(onNavigateReference).toHaveBeenCalledWith({
+      filePath: "src/review/diagram.ts",
+      startLine: 201,
+      endLine: 202,
+    });
+    expect(onNavigateFile).not.toHaveBeenCalled();
+    expect(await screen.findByText("Showing src/review/diagram.ts:L201-L202")).toBeInTheDocument();
+
+    navigateFile.execute({ action: "file", filePath: "foo.txt", startLine: 3 });
+    expect(onNavigateReference).toHaveBeenLastCalledWith({
+      filePath: "docs/foo.txt",
+      startLine: 3,
+    });
+  });
+
+  it("navigates to a file line reference when the realtime tool executes", async () => {
+    const onNavigateReference = vi.fn();
+    const options = renderVoiceSelectionDemo({ onNavigateReference });
+    const navigateReference = options.tools.find((tool) => tool.name === "navigate_code_reference");
+    if (!navigateReference) {
+      throw new Error("Expected code reference navigation voice tool");
+    }
+
+    expect(navigateReference.execute({ reference: "src/review/diagram.ts:L201-L202" })).toEqual({
+      ok: true,
+      reference: {
+        filePath: "src/review/diagram.ts",
+        startLine: 201,
+        endLine: 202,
+      },
+    });
+    expect(onNavigateReference).toHaveBeenCalledWith({
+      filePath: "src/review/diagram.ts",
+      startLine: 201,
+      endLine: 202,
+    });
+    expect(await screen.findByText("Showing src/review/diagram.ts:L201-L202")).toBeInTheDocument();
+
+    navigateReference.execute({ filePath: "foo.txt", startLine: 3 });
+    expect(onNavigateReference).toHaveBeenLastCalledWith({
+      filePath: "docs/foo.txt",
+      startLine: 3,
+    });
   });
 });

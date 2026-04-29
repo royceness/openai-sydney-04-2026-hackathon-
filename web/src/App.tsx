@@ -515,6 +515,7 @@ export default function App() {
             setSelection(null);
             setActiveCommentId(null);
           }}
+          onNavigateReference={handleNavigateReference}
           onNavigateThread={handleNavigateThread}
           pr={review.pr}
           reviewId={review.reviewId}

@@ -56,7 +56,7 @@ describe("AIWorkbench", () => {
     expect(onAsk).toHaveBeenCalledWith("Explain this function");
   });
 
-  it("renders completed markdown thread output", () => {
+  it("renders completed markdown thread output", async () => {
     renderWorkbench({
       threads: [
         {
@@ -73,8 +73,9 @@ describe("AIWorkbench", () => {
 
     expect(screen.getByText("Diagram this flow")).toBeInTheDocument();
     expect(screen.getByText("complete")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Diagram this flow/ }));
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
-    expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
+    expect(screen.getByText(/flowchart LR/)).toBeInTheDocument();
   });
 
   it("renders and deletes local PR comment drafts", async () => {
@@ -186,6 +187,11 @@ describe("AIWorkbench", () => {
 
     const header = screen.getByRole("button", { name: /Explain this function/ });
 
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("This is the thread body.")).not.toBeInTheDocument();
+
+    fireEvent.click(header);
+
     expect(header).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("This is the thread body.")).toBeInTheDocument();
 
@@ -193,11 +199,6 @@ describe("AIWorkbench", () => {
 
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("This is the thread body.")).not.toBeInTheDocument();
-
-    fireEvent.click(header);
-
-    expect(header).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("This is the thread body.")).toBeVisible();
   });
 
   it("keeps a collapsed thread closed when thread content streams in", async () => {
@@ -217,7 +218,7 @@ describe("AIWorkbench", () => {
     });
 
     const header = screen.getByRole("button", { name: /Explain this function/ });
-    await userEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
 
     rerender(
       <AIWorkbench
@@ -295,6 +296,7 @@ describe("AIWorkbench", () => {
       ],
     });
 
+    await userEvent.click(screen.getByRole("button", { name: /Find the issue/ }));
     await userEvent.click(screen.getByRole("button", { name: "src/review/diagram.ts:L42-L44" }));
 
     expect(onNavigateReference).toHaveBeenCalledWith({
@@ -385,7 +387,6 @@ describe("AIWorkbench", () => {
     });
 
     const header = screen.getByRole("button", { name: /Found issue/ });
-    await userEvent.click(header);
     expect(header).toHaveAttribute("aria-expanded", "false");
 
     rerender(

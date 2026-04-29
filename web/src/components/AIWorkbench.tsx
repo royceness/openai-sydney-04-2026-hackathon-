@@ -54,7 +54,7 @@ export function AIWorkbench({
   const [submissionSaving, setSubmissionSaving] = useState(false);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
   const threadElementRefs = useRef(new Map<string, HTMLElement>());
-  const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
+  const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set());
   const publishableCommentCount = comments.filter((comment) => comment.status === "draft" || comment.status === "failed").length;
   const hasPublishingComment = comments.some((comment) => comment.status === "publishing");
   const canSubmitReview =

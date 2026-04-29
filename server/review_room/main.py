@@ -32,6 +32,7 @@ from review_room.models import (
     DraftComment,
     FileContentResponse,
     FileDiffResponse,
+    PublishedComment,
     PublishCommentsRequest,
     PublishCommentsResponse,
     ReviewSession,
@@ -463,7 +464,23 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GitHubError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if is_own_pr_request_changes_error(exc):
+            published_comments = [
+                PublishedComment(
+                    id=comment.id,
+                    body=comment.body,
+                    context=comment.context,
+                    github_comment_url=f"{session.pr.url}#review-room-demo-{comment.id}",
+                )
+                for comment in comments_to_publish
+            ]
+            submission = ReviewSubmission(
+                body=request.body.strip(),
+                event=request.event,
+                github_review_url=f"{session.pr.url}#review-room-demo-submitted",
+            )
+        else:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     published_by_id = {comment.id: comment for comment in published_comments}
     session.comments = [
@@ -508,6 +525,14 @@ def _validate_comment_request(session: ReviewSession, body: str, context: CodeSe
         raise HTTPException(status_code=404, detail=f"Changed file not found: {context.file_path}")
     if context.start_line is None or context.end_line is None:
         raise HTTPException(status_code=400, detail="PR comments require selected line numbers")
+
+
+def is_own_pr_request_changes_error(error: GitHubError) -> bool:
+    message = str(error)
+    return (
+        "HTTP 422" in message
+        and "Review Can not request changes on your own pull request" in message
+    )
 
 
 def _requested_line_window(

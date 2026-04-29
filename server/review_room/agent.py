@@ -39,13 +39,21 @@ class CodeAgent(Protocol):
 
 
 class CodexAppServerAgent:
-    model = "gpt-5.3-codex-spark"
-    service_tier = "fast"
-    reasoning_effort = "low"
+    default_model = "gpt-5.5"
+    default_fallback_models: list[str] = []
+    default_service_tier = "fast"
+    default_reasoning_effort = "low"
     stdio_limit = 10 * 1024 * 1024
 
     def __init__(self, command: str | None = None) -> None:
         self.command = command or os.environ.get("REVIEW_ROOM_CODEX_COMMAND", "codex")
+        self.model = os.environ.get("REVIEW_ROOM_CODEX_MODEL", self.default_model)
+        self.fallback_models = configured_fallback_models(
+            os.environ.get("REVIEW_ROOM_CODEX_FALLBACK_MODELS"),
+            self.default_fallback_models,
+        )
+        self.service_tier = os.environ.get("REVIEW_ROOM_CODEX_SERVICE_TIER", self.default_service_tier)
+        self.reasoning_effort = os.environ.get("REVIEW_ROOM_CODEX_REASONING_EFFORT", self.default_reasoning_effort)
         self._proc: asyncio.subprocess.Process | None = None
         self._next_id = 1
         self._lock = asyncio.Lock()
@@ -63,12 +71,19 @@ class CodexAppServerAgent:
 
         async with self._lock:
             await self._ensure_started()
-            thread_response = await self._request("thread/start", self._thread_start_params(str(repo)))
-            codex_thread_id = thread_response["result"]["thread"]["id"]
-
-            await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
-            markdown = await self._collect_turn(codex_thread_id, on_delta)
-            return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+            last_error: AgentError | None = None
+            for model in self._models_to_try():
+                try:
+                    thread_response = await self._request("thread/start", self._thread_start_params(str(repo), model))
+                    codex_thread_id = thread_response["result"]["thread"]["id"]
+                    await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt, model))
+                    markdown = await self._collect_turn(codex_thread_id, on_delta)
+                    return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+                except AgentError as exc:
+                    if not is_usage_limit_error(exc):
+                        raise
+                    last_error = exc
+            raise last_error or AgentError("Codex app-server failed without returning an error")
 
     async def continue_thread(
         self,
@@ -83,9 +98,17 @@ class CodexAppServerAgent:
 
         async with self._lock:
             await self._ensure_started()
-            await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
-            markdown = await self._collect_turn(codex_thread_id, on_delta)
-            return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+            last_error: AgentError | None = None
+            for model in self._models_to_try():
+                try:
+                    await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt, model))
+                    markdown = await self._collect_turn(codex_thread_id, on_delta)
+                    return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+                except AgentError as exc:
+                    if not is_usage_limit_error(exc):
+                        raise
+                    last_error = exc
+            raise last_error or AgentError("Codex app-server failed without returning an error")
 
     async def close(self) -> None:
         async with self._lock:
@@ -123,23 +146,26 @@ class CodexAppServerAgent:
         await self._send({"id": request_id, "method": method, "params": params})
         return await self._response(request_id)
 
-    def _thread_start_params(self, repo_path: str) -> dict:
+    def _models_to_try(self) -> list[str]:
+        return [self.model, *(model for model in self.fallback_models if model != self.model)]
+
+    def _thread_start_params(self, repo_path: str, model: str | None = None) -> dict:
         return {
             "cwd": repo_path,
             "approvalPolicy": "never",
             "sandbox": "read-only",
             "ephemeral": True,
-            "model": self.model,
+            "model": model or self.model,
             "serviceTier": self.service_tier,
             "baseInstructions": "You are a code review assistant inside Review Room. Do not edit files.",
         }
 
-    def _turn_start_params(self, codex_thread_id: str, repo_path: str, prompt: str) -> dict:
+    def _turn_start_params(self, codex_thread_id: str, repo_path: str, prompt: str, model: str | None = None) -> dict:
         return {
             "threadId": codex_thread_id,
             "cwd": repo_path,
             "approvalPolicy": "never",
-            "model": self.model,
+            "model": model or self.model,
             "serviceTier": self.service_tier,
             "effort": self.reasoning_effort,
             "input": [{"type": "text", "text": prompt, "text_elements": []}],
@@ -210,6 +236,17 @@ class CodexAppServerAgent:
         except TimeoutError:
             proc.kill()
             await proc.wait()
+
+
+def configured_fallback_models(value: str | None, default: list[str]) -> list[str]:
+    if value is None:
+        return default
+    return [model.strip() for model in value.split(",") if model.strip()]
+
+
+def is_usage_limit_error(error: AgentError) -> bool:
+    message = str(error)
+    return "usageLimitExceeded" in message or "usage limit" in message.lower()
 
 
 class CodexAppServerAgentPool:

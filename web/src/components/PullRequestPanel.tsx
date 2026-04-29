@@ -1,5 +1,6 @@
 import type {
   ChangedFile,
+  CodeReference,
   CodeSelection,
   DraftComment,
   PullRequestInfo,
@@ -22,6 +23,7 @@ export function PullRequestPanel({
   onEditComment,
   onFollowUp,
   onNavigateFile,
+  onNavigateReference,
   onNavigateThread,
   onSetReviewSubmissionBody,
   onSetReviewSubmissionEvent,
@@ -47,6 +49,7 @@ export function PullRequestPanel({
   onEditComment: (commentId: string, body: string) => Promise<{ status: "updated" | "not-found" | "empty" | "failed"; message?: string }>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
+  onNavigateReference: (reference: CodeReference) => void;
   onNavigateThread: (threadId: string) => void;
   onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
   onSetReviewSubmissionEvent: (event: ReviewSubmissionEvent) => Promise<ReviewSubmission>;
@@ -88,6 +91,7 @@ export function PullRequestPanel({
           onEditComment={onEditComment}
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
+          onNavigateReference={onNavigateReference}
           onNavigateThread={onNavigateThread}
           pr={pr}
           onSetReviewSubmissionBody={onSetReviewSubmissionBody}

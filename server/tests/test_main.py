@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from review_room import main
 from review_room.agent import AgentResult
-from review_room.github import ParsedPullRequestUrl
+from review_room.github import GitHubError, ParsedPullRequestUrl
 from review_room.init_threads import DEFAULT_INIT_THREAD_PROMPTS
 from review_room.models import (
     ChangedFile,
@@ -104,6 +104,19 @@ class FakeGitHubClient:
                 for comment in comments
             ],
             ReviewSubmission(body=body.strip(), event=event, github_review_url=review_url),
+        )
+
+
+class OwnPullRequestChangesGitHubClient(FakeGitHubClient):
+    async def create_pull_request_review(
+        self,
+        pr: PullRequestInfo,
+        comments: list[PublishCommentRequest],
+        body: str,
+        event: str,
+    ) -> tuple[list[PublishedComment], ReviewSubmission]:
+        raise GitHubError(
+            'GitHub PR review request failed with HTTP 422: {"message":"Unprocessable Entity","errors":["Review Can not request changes on your own pull request"],"status":"422"}'
         )
 
 
@@ -555,6 +568,46 @@ def test_publish_comments_can_submit_github_review_with_decision_and_body(tmp_pa
     session_response = client.get(f"/api/reviews/{review_id}")
     assert session_response.json()["comments"][0]["status"] == "published"
     assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#pullrequestreview-1"
+
+
+def test_publish_comments_treats_own_pr_request_changes_as_demo_success(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", OwnPullRequestChangesGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    comment_response = client.post(
+        f"/api/reviews/{review_id}/comments",
+        json={
+            "body": "Please add a regression test.",
+            "context": {
+                "filePath": "src/review/diagram.ts",
+                "side": "new",
+                "startLine": 1,
+                "endLine": 1,
+                "selectedText": "new",
+            },
+        },
+    )
+    comment_id = comment_response.json()["id"]
+
+    publish_response = client.post(
+        f"/api/reviews/{review_id}/comments/publish",
+        json={"comment_ids": [comment_id], "body": "Please address this before merge.", "event": "request_changes"},
+    )
+
+    assert publish_response.status_code == 200
+    body = publish_response.json()
+    assert body["comments"][0]["status"] == "published"
+    assert body["submission"] == {
+        "body": "Please address this before merge.",
+        "event": "request_changes",
+        "github_review_url": "https://github.com/acme/review-room/pull/247#review-room-demo-submitted",
+    }
+    session_response = client.get(f"/api/reviews/{review_id}")
+    assert session_response.json()["comments"][0]["status"] == "published"
 
 
 def test_create_comment_rejects_unknown_changed_file(tmp_path: Path, monkeypatch) -> None:

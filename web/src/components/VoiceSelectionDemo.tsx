@@ -11,6 +11,7 @@ import { getFileContent } from "../api";
 import type { ThreadStatusAnnouncement } from "../App";
 import type {
   ChangedFile,
+  CodeReference,
   CodeSelection,
   DraftComment,
   FileContentResponse,
@@ -58,6 +59,7 @@ export function VoiceSelectionDemo({
   onEditComment,
   onFollowUp,
   onNavigateFile,
+  onNavigateReference,
   onNavigateThread,
   pr,
   onSetReviewSubmissionBody,
@@ -81,6 +83,7 @@ export function VoiceSelectionDemo({
   onEditComment: (commentId: string, body: string) => Promise<EditCommentResult>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
+  onNavigateReference: (reference: CodeReference) => void;
   onNavigateThread: (threadId: string) => void;
   pr: PullRequestInfo;
   onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
@@ -108,6 +111,7 @@ export function VoiceSelectionDemo({
   const onEditCommentRef = useRef(onEditComment);
   const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
+  const onNavigateReferenceRef = useRef(onNavigateReference);
   const onNavigateThreadRef = useRef(onNavigateThread);
   const prRef = useRef<PullRequestInfo>(pr);
   const onSetReviewSubmissionBodyRef = useRef(onSetReviewSubmissionBody);
@@ -165,6 +169,10 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     onNavigateFileRef.current = onNavigateFile;
   }, [onNavigateFile]);
+
+  useEffect(() => {
+    onNavigateReferenceRef.current = onNavigateReference;
+  }, [onNavigateReference]);
 
   useEffect(() => {
     onNavigateThreadRef.current = onNavigateThread;
@@ -288,7 +296,7 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "search_review_threads",
-        description: "Search already-loaded Review Room thread titles and Markdown text using simple case-insensitive text matching. Use this to find existing answers or resolve ambiguous references to prior findings, such as test gaps, risks, edge cases, or issues. The response includes auto-generated initial analysis thread statuses so you can tell whether that analysis is still queued/running or complete. If the user asks for repository investigation and the existing threads do not answer it, create a Codex thread instead.",
+        description: "Search already-loaded Review Room thread titles and Markdown text using simple case-insensitive text matching. Use this to find existing answers or resolve ambiguous references to prior findings, such as Mermaid diagrams, diagrams, test gaps, risks, edge cases, or issues. The response includes auto-generated initial analysis thread statuses so you can tell whether that analysis is still queued/running or complete. If the user asks for repository investigation and the existing threads do not answer it, create a Codex thread instead.",
         parameters: z.object({
           query: z.string().min(1).describe("Plain text to search for. Do not use regular expressions."),
         }),
@@ -318,7 +326,7 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "ask_general_question",
-        description: "Create a new Codex-backed review workbench thread for a general pull request or repository question. Use this for substantive repository research, including finding tests, test coverage, callers, usages, behavior, risks, edge cases, or diagrams. This includes requests like 'find all tests that exercise this file', 'show me the tests for this', and 'who calls this API'.",
+        description: "Create a new Codex-backed review workbench thread for a general pull request or repository question. Use this for substantive repository research, including finding tests, test coverage, callers, usages, behavior, risks, edge cases, or creating a new diagram. This includes requests like 'find all tests that exercise this file', 'show me the tests for this', and 'who calls this API'. For requests to show an existing Mermaid diagram, search review threads first.",
         parameters: z.object({
           question: z.string().min(1).describe("The user's question, cleaned up without adding new meaning."),
         }),
@@ -582,20 +590,74 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "navigate_file",
-        description: "Navigate the pull request diff to another changed file. Use action next for commands like 'show me the next file', previous for 'previous file', and file for commands like 'go to foo.txt'.",
+        description:
+          "Navigate the pull request diff to another changed file. Use action next for commands like 'show me the next file', previous for 'previous file', and file for commands like 'go to foo.txt'. If the user gives a line number or file:line reference, include startLine or put the full reference in filePath.",
         parameters: z.object({
           action: z.enum(["next", "previous", "file"]),
-          filePath: z.string().optional().describe("Target file path or basename when action is file."),
+          filePath: z.string().optional().describe("Target file path, basename, or file:line reference when action is file."),
+          startLine: z.number().int().positive().optional().describe("First one-based line to navigate to when action is file."),
+          endLine: z.number().int().positive().optional().describe("Last one-based line to highlight."),
         }),
-        execute: ({ action, filePath }) => {
-          const result = resolveFileNavigation({ action, filePath } as FileNavigationRequest, filesRef.current, activeFileRef.current);
+        execute: ({ action, filePath, startLine, endLine }) => {
+          const parsedReference = action === "file" && filePath ? parseVoiceCodeReference(filePath) : null;
+          const requestedFilePath = parsedReference?.filePath ?? filePath;
+          const requestedStartLine = parsedReference?.startLine ?? startLine;
+          const requestedEndLine = parsedReference?.endLine ?? endLine;
+          const result = resolveFileNavigation({ action, filePath: requestedFilePath } as FileNavigationRequest, filesRef.current, activeFileRef.current);
           if (!result.ok) {
             setPopup({ title: "File navigation", body: result.message });
             return result;
           }
+          if (requestedStartLine !== undefined) {
+            const targetReference = {
+              filePath: result.filePath,
+              startLine: requestedStartLine,
+              ...(requestedEndLine !== undefined ? { endLine: requestedEndLine } : {}),
+            };
+            onNavigateReferenceRef.current(targetReference);
+            setPopup({ title: "Code navigation", body: formatCodeReferenceForPopup(targetReference) });
+            return { ok: true, reference: targetReference };
+          }
           onNavigateFileRef.current(result.filePath);
           setPopup({ title: "File navigation", body: `Showing ${result.filePath}` });
           return result;
+        },
+      }),
+      defineVoiceTool({
+        name: "navigate_code_reference",
+        description:
+          "Navigate the PR diff to a changed-file code reference from a Codex thread, such as src/foo.ts:L42 or src/foo.ts:L42-L68. Use this when the user asks to go to, jump to, show, open, or take them to code mentioned in a Codex thread.",
+        parameters: z.object({
+          reference: z.string().optional().describe("Full code reference, for example src/foo.ts:L42-L68."),
+          filePath: z.string().optional().describe("Changed file path or basename when reference is split into fields."),
+          startLine: z.number().int().positive().optional().describe("First one-based line to navigate to."),
+          endLine: z.number().int().positive().optional().describe("Last one-based line to highlight."),
+        }),
+        execute: ({ reference, filePath, startLine, endLine }) => {
+          const parsedReference = reference ? parseVoiceCodeReference(reference) : null;
+          const requestedFilePath = parsedReference?.filePath ?? filePath;
+          const requestedStartLine = parsedReference?.startLine ?? startLine;
+          const requestedEndLine = parsedReference?.endLine ?? endLine;
+          if (!requestedFilePath || !requestedStartLine) {
+            const message = "Provide a changed file path and line number, such as src/foo.ts:L42.";
+            setPopup({ title: "Code navigation", body: message });
+            return { ok: false, message };
+          }
+
+          const resolved = resolveFileNavigation({ action: "file", filePath: requestedFilePath }, filesRef.current, activeFileRef.current);
+          if (!resolved.ok) {
+            setPopup({ title: "Code navigation", body: resolved.message });
+            return resolved;
+          }
+
+          const targetReference = {
+            filePath: resolved.filePath,
+            startLine: requestedStartLine,
+            ...(requestedEndLine !== undefined ? { endLine: requestedEndLine } : {}),
+          };
+          onNavigateReferenceRef.current(targetReference);
+          setPopup({ title: "Code navigation", body: formatCodeReferenceForPopup(targetReference) });
+          return { ok: true, reference: targetReference };
         },
       }),
     ],
@@ -607,7 +669,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, check auto-generated initial analysis threads for high-level PR context, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. The auto-generated initial analysis threads have source init and are: PR summary, Tests audit, Architecture coherence report, Bug finder, and Doc validator. They may take some time to complete. Before answering a high-level question like \"give me a summary of what's changed in this PR\", \"give me an overview\", \"where should I dive in\", \"what changed\", or \"what should I look at first\", you MUST call read_initial_analysis_thread with category pr-summary. If that thread is found, you MUST consider its Markdown before answering. Before answering a general tests or test coverage question, you MUST call read_initial_analysis_thread with category tests-audit. Before answering a general architecture, design, structure, or integration question, you MUST call read_initial_analysis_thread with category architecture-coherence-report. Before answering a general bug, risk, regression, edge case, or failure-mode question, you MUST call read_initial_analysis_thread with category bug-finder. Before answering a general docs, README, comment, or documentation question, you MUST call read_initial_analysis_thread with category doc-validator. For general PR questions, bias toward reading those threads first with read_initial_analysis_thread, list_review_threads, search_review_threads, get_review_thread_text, or get_review_room_context. If a user asks a question that might be answered by the initial analysis while the relevant thread is queued or running, try to answer from the PR description and changed files available in get_review_room_context or list_pr_files, and say that after the initial analysis finishes you can give a deeper answer. Use thread status fields to tell whether an initial analysis thread is queued, running, complete, or failed. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. When the user asks to add PR comments from testing gaps or findings in a Codex thread, first read the named thread with get_review_thread_text or read_initial_analysis_thread. Use the file and line numbers from that thread when they point to files changed in this PR, and call draft_pr_comment_at_location for each comment. If a thread line number refers to a file not changed in this PR, do not attach a comment to that unchanged file; use list_pr_files, summarize_changed_lines, and read_pr_file_range to find the relevant changed PR logic that is not tested, then call draft_pr_comment_at_location on that changed location. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here without giving a specific location; extract the requested comment text into the comment parameter. Call draft_pr_comment_at_location when the user asks to draft a PR comment at a specific file and line or when converting thread findings into PR comments with cited locations. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call set_review_discussion_comment when the user asks to set, write, change, or edit the top-level review discussion comment. Call set_review_decision when the user says they are approving, requesting changes, or just publishing comments. Call get_review_submission_state when the user asks what review will be submitted. Call submit_github_review when the user asks to submit, publish, send, or post the GitHub review; if the tool reports missing details, ask exactly: Are you approving or requesting changes? Also do you want to leave a discussion comment too? Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this PR, this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, asks for thread names, or asks whether initial analysis is still processing. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, search the existing and auto-generated initial analysis threads first unless the user asks for a fresh investigation; if those threads do not answer it, call ask_general_question so Codex can inspect the repository. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
+        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, check auto-generated initial analysis threads for high-level PR context, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. The auto-generated initial analysis threads have source init and are: PR summary, Tests audit, Architecture coherence report, Bug finder, and Doc validator. They may take some time to complete. Before answering a high-level question like \"give me a summary of what's changed in this PR\", \"give me an overview\", \"where should I dive in\", \"what changed\", or \"what should I look at first\", you MUST call read_initial_analysis_thread with category pr-summary. If that thread is found, you MUST consider its Markdown before answering. Before answering a general tests or test coverage question, you MUST call read_initial_analysis_thread with category tests-audit. Before answering a general architecture, design, structure, or integration question, you MUST call read_initial_analysis_thread with category architecture-coherence-report. Before answering a general bug, risk, regression, edge case, or failure-mode question, you MUST call read_initial_analysis_thread with category bug-finder. Before answering a general docs, README, comment, or documentation question, you MUST call read_initial_analysis_thread with category doc-validator. For general PR questions, bias toward reading those threads first with read_initial_analysis_thread, list_review_threads, search_review_threads, get_review_thread_text, or get_review_room_context. If a user asks a question that might be answered by the initial analysis while the relevant thread is queued or running, try to answer from the PR description and changed files available in get_review_room_context or list_pr_files, and say that after the initial analysis finishes you can give a deeper answer. Use thread status fields to tell whether an initial analysis thread is queued, running, complete, or failed. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. When the user asks to show, open, find, or take them to a Mermaid diagram or existing diagram, first call search_review_threads with query \"mermaid\". If that finds no matches, call search_review_threads with query \"diagram\". If a matching thread is found, call navigate_review_thread for the best matching thread. Only call ask_general_question for a diagram request when the user asks to create a new diagram or no existing thread contains one. When the user asks to add PR comments from testing gaps or findings in a Codex thread, first read the named thread with get_review_thread_text or read_initial_analysis_thread. Use the file and line numbers from that thread when they point to files changed in this PR, and call draft_pr_comment_at_location for each comment. If a thread line number refers to a file not changed in this PR, do not attach a comment to that unchanged file; use list_pr_files, summarize_changed_lines, and read_pr_file_range to find the relevant changed PR logic that is not tested, then call draft_pr_comment_at_location on that changed location. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here without giving a specific location; extract the requested comment text into the comment parameter. Call draft_pr_comment_at_location when the user asks to draft a PR comment at a specific file and line or when converting thread findings into PR comments with cited locations. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call set_review_discussion_comment when the user asks to set, write, change, or edit the top-level review discussion comment. Call set_review_decision when the user says they are approving, requesting changes, or just publishing comments. Call get_review_submission_state when the user asks what review will be submitted. Call submit_github_review when the user asks to submit, publish, send, or post the GitHub review; if the tool reports missing details, ask exactly: Are you approving or requesting changes? Also do you want to leave a discussion comment too? Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this PR, this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, asks for thread names, or asks whether initial analysis is still processing. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as Mermaid diagrams, diagrams, test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, search the existing and auto-generated initial analysis threads first unless the user asks for a fresh investigation; if those threads do not answer it, call ask_general_question so Codex can inspect the repository. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call navigate_code_reference when the user asks to go to, jump to, show, open, or take them to a file:line reference mentioned in a Codex thread or visible in Markdown, such as src/foo.ts:L42 or src/foo.ts:L42-L68. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, or create a new Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file without a line reference. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
       audio: { output: { voice: "marin" } },
       onEvent: (event) => {
         logVoiceTranscript(event, {
@@ -803,6 +865,35 @@ function summarizeCommentLocation(context: CodeSelection) {
     startLine: context.startLine,
     endLine: context.endLine,
   };
+}
+
+export function parseVoiceCodeReference(value: string): CodeReference | null {
+  const match = /(?<filePath>[^`\s():]+(?:\/[^`\s():]+)*):L(?<startLine>\d+)(?:-L?(?<endLine>\d+))?/.exec(value.trim());
+  if (!match?.groups) {
+    return null;
+  }
+  const startLine = Number.parseInt(match.groups.startLine, 10);
+  const endLineText = match.groups.endLine;
+  const endLine = endLineText ? Number.parseInt(endLineText, 10) : undefined;
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
+    return null;
+  }
+  if (endLine !== undefined && (!Number.isSafeInteger(endLine) || endLine < startLine)) {
+    return null;
+  }
+  return {
+    filePath: match.groups.filePath,
+    startLine,
+    ...(endLine !== undefined ? { endLine } : {}),
+  };
+}
+
+function formatCodeReferenceForPopup(reference: CodeReference) {
+  const lineLabel =
+    reference.endLine !== undefined && reference.endLine !== reference.startLine
+      ? `L${reference.startLine}-L${reference.endLine}`
+      : `L${reference.startLine}`;
+  return `Showing ${reference.filePath}:${lineLabel}`;
 }
 
 function selectedDraftCommentId() {

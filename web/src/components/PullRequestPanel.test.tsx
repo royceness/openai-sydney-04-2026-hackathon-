@@ -30,6 +30,7 @@ describe("PullRequestPanel", () => {
         onEditComment={vi.fn()}
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
+        onNavigateReference={() => undefined}
         onNavigateThread={() => undefined}
         onSetReviewSubmissionBody={vi.fn()}
         onSetReviewSubmissionEvent={vi.fn()}

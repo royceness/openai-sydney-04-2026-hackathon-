@@ -29,6 +29,7 @@ const comment: ReviewComment = {
 describe("DiffPane comments", () => {
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("marks a commented diff line and expands the comment when clicked", async () => {
@@ -59,14 +60,26 @@ describe("DiffPane comments", () => {
     expect(onUpdateComment).toHaveBeenCalledWith("gh_comment_101", "Updated comment body");
     expect(await screen.findByText("Updated comment body")).toBeInTheDocument();
   });
+
+  it("scrolls to a target code reference line", () => {
+    const scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    render(<DiffPaneHarness initialComments={[]} targetReference={{ filePath: "src/review/diagram.ts", startLine: 2 }} />);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    expect(screen.getByText("newer")).toBeInTheDocument();
+  });
 });
 
 function DiffPaneHarness({
   initialComments,
   onUpdateComment,
+  targetReference = null,
 }: {
   initialComments: ReviewComment[];
   onUpdateComment?: (commentId: string, body: string) => Promise<ReviewComment>;
+  targetReference?: { filePath: string; startLine: number; endLine?: number } | null;
 }) {
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [comments, setComments] = useState(initialComments);
@@ -81,7 +94,7 @@ function DiffPaneHarness({
     <DiffPane
       activeCommentId={activeCommentId}
       comments={comments}
-      diff={"@@ -1 +1 @@\n-old\n+new"}
+      diff={"@@ -1,2 +1,2 @@\n-old\n+new\n older\n newer"}
       diffError={null}
       filePath="src/review/diagram.ts"
       onActiveCommentChange={setActiveCommentId}
@@ -92,7 +105,7 @@ function DiffPaneHarness({
         return updated;
       }}
       selection={null}
-      targetReference={null}
+      targetReference={targetReference}
     />
   );
 }
