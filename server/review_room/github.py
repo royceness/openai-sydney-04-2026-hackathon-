@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+from dataclasses import dataclass
+
+import httpx
+
+from review_room.models import ChangedFile, PullRequestInfo
+
+
+PR_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)/?$"
+)
+
+
+@dataclass(frozen=True)
+class ParsedPullRequestUrl:
+    owner: str
+    repo: str
+    number: int
+
+
+class GitHubError(RuntimeError):
+    pass
+
+
+def parse_pr_url(pr_url: str) -> ParsedPullRequestUrl:
+    match = PR_URL_RE.match(pr_url.strip())
+    if match is None:
+        raise ValueError("Expected a public GitHub pull request URL like https://github.com/owner/repo/pull/123")
+    return ParsedPullRequestUrl(
+        owner=match.group("owner"),
+        repo=match.group("repo"),
+        number=int(match.group("number")),
+    )
+
+
+async def discover_github_token() -> str | None:
+    env_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if env_token:
+        return env_token
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gh",
+            "auth",
+            "token",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except (FileNotFoundError, TimeoutError):
+        return None
+
+    if proc.returncode != 0:
+        return None
+    token = stdout.decode().strip()
+    return token or None
+
+
+class GitHubClient:
+    def __init__(self, token: str | None = None) -> None:
+        self._token = token
+
+    async def _headers(self) -> dict[str, str]:
+        token = self._token if self._token is not None else await discover_github_token()
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "review-room-hackathon",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def fetch_pull_request(self, parsed: ParsedPullRequestUrl) -> tuple[PullRequestInfo, list[ChangedFile]]:
+        headers = await self._headers()
+        base_url = f"https://api.github.com/repos/{parsed.owner}/{parsed.repo}/pulls/{parsed.number}"
+        async with httpx.AsyncClient(headers=headers, timeout=30.0, follow_redirects=True) as client:
+            pr_response = await client.get(base_url)
+            if pr_response.status_code >= 400:
+                raise GitHubError(f"GitHub PR request failed with HTTP {pr_response.status_code}: {pr_response.text}")
+            pr_data = pr_response.json()
+
+            files: list[ChangedFile] = []
+            page = 1
+            while True:
+                files_response = await client.get(f"{base_url}/files", params={"per_page": 100, "page": page})
+                if files_response.status_code >= 400:
+                    raise GitHubError(
+                        f"GitHub PR files request failed with HTTP {files_response.status_code}: {files_response.text}"
+                    )
+                page_files = files_response.json()
+                files.extend(map_changed_file(file_data) for file_data in page_files)
+                if len(page_files) < 100:
+                    break
+                page += 1
+
+        return map_pull_request(parsed, pr_data), files
+
+
+def map_pull_request(parsed: ParsedPullRequestUrl, data: dict) -> PullRequestInfo:
+    return PullRequestInfo(
+        owner=parsed.owner,
+        repo=parsed.repo,
+        number=parsed.number,
+        title=data["title"],
+        url=data["html_url"],
+        author=(data.get("user") or {}).get("login"),
+        body=data.get("body") or "",
+        base_ref=data["base"]["ref"],
+        head_ref=data["head"]["ref"],
+        base_sha=data["base"]["sha"],
+        head_sha=data["head"]["sha"],
+    )
+
+
+def map_changed_file(data: dict) -> ChangedFile:
+    return ChangedFile(
+        path=data["filename"],
+        status=data["status"],
+        additions=int(data.get("additions", 0)),
+        deletions=int(data.get("deletions", 0)),
+        patch=data.get("patch"),
+        previous_path=data.get("previous_filename"),
+    )
+

@@ -1,0 +1,11 @@
+{
+  "name": "review-room",
+  "private": true,
+  "scripts": {
+    "dev:web": "npm --prefix web run dev",
+    "dev:server": "cd server && uv run uvicorn review_room.main:app --reload --port 8000",
+    "test:web": "npm --prefix web test -- --run",
+    "test:server": "cd server && uv run pytest"
+  }
+}
+

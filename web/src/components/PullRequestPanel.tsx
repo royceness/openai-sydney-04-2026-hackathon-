@@ -1,0 +1,26 @@
+import type { PullRequestInfo } from "../types";
+
+export function PullRequestPanel({ pr }: { pr: PullRequestInfo }) {
+  return (
+    <section className="border-b border-slate-800 bg-[#0b0e14] p-5">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
+        <a className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 font-semibold text-violet-200" href={pr.url}>
+          PR #{pr.number}
+        </a>
+        <span>
+          {pr.owner}/{pr.repo}
+        </span>
+        <span>
+          {pr.head_ref} to {pr.base_ref}
+        </span>
+        {pr.author ? <span>by {pr.author}</span> : null}
+      </div>
+      <h1 className="mt-3 text-xl font-semibold text-white">{pr.title}</h1>
+      {pr.body ? (
+        <div className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-slate-300">{pr.body}</div>
+      ) : (
+        <div className="mt-4 text-sm text-slate-500">No PR description provided.</div>
+      )}
+    </section>
+  );
+}

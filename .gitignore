@@ -1,0 +1,7 @@
+.review-room/
+server/.venv/
+web/dist/
+web/node_modules/
+web/*.tsbuildinfo
+*.pyc
+__pycache__/
