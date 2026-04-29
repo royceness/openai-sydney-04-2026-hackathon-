@@ -65,6 +65,7 @@ export default function App() {
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const [commentError, setCommentError] = useState<string | null>(null);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
   const commentsRef = useRef<DraftComment[]>([]);
   const previousThreadStatusesRef = useRef<Map<string, ReviewThread["status"]>>(new Map());
@@ -78,6 +79,7 @@ export default function App() {
     setThreadNavigationRequest(null);
     setThreadStatusAnnouncement(null);
     previousThreadStatusesRef.current = new Map();
+    setActiveCommentId(null);
     setComments([]);
     setPendingCommentBody(null);
     setCommentError(null);
@@ -443,6 +445,17 @@ export default function App() {
     });
   }, []);
 
+  const handleUpdateComment = useCallback(async (commentId: string, body: string) => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      throw new Error("Review session is not loaded");
+    }
+    const updated = await updateComment({ reviewId: context.reviewId, commentId, body: body.trim() });
+    setComments((current) => current.map((comment) => (comment.id === updated.id ? updated : comment)));
+    setCommentError(null);
+    return updated;
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -463,6 +476,7 @@ export default function App() {
         onSelectFile={(filePath) => {
           setActiveFile(filePath);
           setSelection(null);
+          setActiveCommentId(null);
         }}
       />
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
@@ -479,6 +493,7 @@ export default function App() {
           onNavigateFile={(filePath) => {
             setActiveFile(filePath);
             setSelection(null);
+            setActiveCommentId(null);
           }}
           onNavigateThread={handleNavigateThread}
           pr={review.pr}
@@ -495,6 +510,10 @@ export default function App() {
           filePath={activeFile}
           diff={activeDiff}
           diffError={diffError}
+          comments={comments.filter((comment) => comment.context.filePath === activeFile)}
+          activeCommentId={activeCommentId}
+          onActiveCommentChange={setActiveCommentId}
+          onUpdateComment={handleUpdateComment}
           targetReference={targetReference}
           selection={selection}
           onSelectionChange={setSelection}

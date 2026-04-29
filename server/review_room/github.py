@@ -9,6 +9,8 @@ import httpx
 
 from review_room.models import (
     ChangedFile,
+    CodeSelection,
+    DraftComment,
     PublishedComment,
     PublishCommentRequest,
     PullRequestInfo,
@@ -82,7 +84,9 @@ class GitHubClient:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    async def fetch_pull_request(self, parsed: ParsedPullRequestUrl) -> tuple[PullRequestInfo, list[ChangedFile]]:
+    async def fetch_pull_request(
+        self, parsed: ParsedPullRequestUrl
+    ) -> tuple[PullRequestInfo, list[ChangedFile], list[DraftComment]]:
         headers = await self._headers()
         base_url = f"https://api.github.com/repos/{parsed.owner}/{parsed.repo}/pulls/{parsed.number}"
         async with httpx.AsyncClient(headers=headers, timeout=30.0, follow_redirects=True) as client:
@@ -105,7 +109,22 @@ class GitHubClient:
                     break
                 page += 1
 
-        return map_pull_request(parsed, pr_data), files
+            comments: list[DraftComment] = []
+            page = 1
+            while True:
+                comments_response = await client.get(f"{base_url}/comments", params={"per_page": 100, "page": page})
+                if comments_response.status_code >= 400:
+                    raise GitHubError(
+                        "GitHub PR comments request failed with "
+                        f"HTTP {comments_response.status_code}: {comments_response.text}"
+                    )
+                page_comments = comments_response.json()
+                comments.extend(map_pull_request_review_comment(comment_data) for comment_data in page_comments)
+                if len(page_comments) < 100:
+                    break
+                page += 1
+
+        return map_pull_request(parsed, pr_data), files, comments
 
     async def create_pull_request_review_comment(
         self,
@@ -246,3 +265,35 @@ def build_review_comment_item(comment: PublishCommentRequest) -> dict[str, objec
         payload["start_line"] = start_line
         payload["start_side"] = side
     return payload
+
+
+def map_pull_request_review_comment(data: dict) -> DraftComment:
+    line = data.get("line") or data.get("original_line")
+    start_line = data.get("start_line") or data.get("original_start_line") or line
+    side = map_comment_side(data.get("side") or data.get("start_side"))
+    commit_sha = data.get("commit_id") or data.get("original_commit_id")
+    github_comment_id = int(data["id"])
+    return DraftComment(
+        id=f"gh_comment_{github_comment_id}",
+        source="github",
+        body=data.get("body") or "",
+        context=CodeSelection(
+            filePath=data["path"],
+            side=side,
+            startLine=start_line,
+            endLine=line,
+            selectedText="",
+            diffHunk=data.get("diff_hunk"),
+            commitSha=commit_sha,
+        ),
+        status="imported",
+        author=(data.get("user") or {}).get("login"),
+        github_comment_id=github_comment_id,
+        github_comment_url=data.get("html_url"),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+    )
+
+
+def map_comment_side(value: object) -> str:
+    return "old" if value == "LEFT" else "new"
