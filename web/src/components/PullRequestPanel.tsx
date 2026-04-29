@@ -1,4 +1,5 @@
 import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewThread } from "../types";
+import type { ThreadStatusAnnouncement } from "../App";
 import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 
 export function PullRequestPanel({
@@ -16,6 +17,7 @@ export function PullRequestPanel({
   pr,
   reviewId,
   selection,
+  threadStatusAnnouncement,
   threads,
 }: {
   activeFile: string | null;
@@ -32,6 +34,7 @@ export function PullRequestPanel({
   pr: PullRequestInfo;
   reviewId: string;
   selection: CodeSelection | null;
+  threadStatusAnnouncement: ThreadStatusAnnouncement | null;
   threads: ReviewThread[];
 }) {
   return (
@@ -66,6 +69,7 @@ export function PullRequestPanel({
           onNavigateThread={onNavigateThread}
           reviewId={reviewId}
           selection={selection}
+          threadStatusAnnouncement={threadStatusAnnouncement}
           threads={threads}
         />
       </div>

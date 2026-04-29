@@ -129,4 +129,24 @@ describe("App draft comments", () => {
     expect(screen.getByText("Location: README:L1-L2")).toBeInTheDocument();
   });
 
+  it("announces only queued or running threads that become terminal", async () => {
+    const { nextThreadStatusAnnouncement } = await import("./App");
+    const completeThread: ReviewThread = {
+      id: "thr_1",
+      source: "manual",
+      title: "Diagram this flow",
+      status: "complete",
+      created_at: "2026-04-29T00:00:00Z",
+      updated_at: "2026-04-29T00:00:01Z",
+    };
+
+    expect(nextThreadStatusAnnouncement([completeThread], new Map([["thr_1", "running"]]))).toEqual({
+      requestId: expect.any(Number),
+      threadId: "thr_1",
+      text: 'The thread "Diagram this flow" is complete.',
+    });
+    expect(nextThreadStatusAnnouncement([completeThread], new Map())).toBeNull();
+    expect(nextThreadStatusAnnouncement([{ ...completeThread, status: "running" }], new Map([["thr_1", "queued"]]))).toBeNull();
+  });
+
 });
