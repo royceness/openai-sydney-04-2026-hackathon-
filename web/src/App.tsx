@@ -323,6 +323,7 @@ export default function App() {
         <PullRequestPanel
           activeFile={activeFile}
           activeThreadId={activeThreadId}
+          comments={comments}
           files={review.files}
           onAsk={(utterance) => handleAsk(utterance, "voice")}
           onDeleteComment={handleDeleteComment}

@@ -1,11 +1,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
+import type { ChangedFile, CodeSelection, DraftComment, ReviewThread } from "../types";
 import {
   buildReviewRoomContext,
   formatChangedLineSummaries,
   getThreadTextByLineRange,
+  listDraftCommentsForVoice,
   listThreadSummariesForVoice,
   resolveFileNavigation,
   resolveFollowUpThread,
@@ -89,9 +90,20 @@ const completedThread: ReviewThread = {
   updated_at: "2026-04-29T00:00:00Z",
 };
 
+const draftComments: DraftComment[] = [
+  {
+    id: "draft_1",
+    body: "Ask for a clearer README translation.",
+    context: selectedCode,
+    status: "draft",
+    created_at: "2026-04-29T00:01:00Z",
+  },
+];
+
 function renderVoiceSelectionDemo({
   activeFile = "src/review/diagram.ts",
   activeThreadId = "thr_issue",
+  comments = draftComments,
   files = changedFiles,
   onAsk = vi.fn(() => Promise.resolve()),
   onDeleteComment = vi.fn(() => ({ status: "deleted" as const })),
@@ -115,6 +127,7 @@ function renderVoiceSelectionDemo({
 }: {
   activeFile?: string | null;
   activeThreadId?: string | null;
+  comments?: DraftComment[];
   files?: ChangedFile[];
   onAsk?: (utterance: string) => Promise<void>;
   onDeleteComment?: (commentId: string) => { status: "deleted" | "not-found" };
@@ -144,6 +157,7 @@ function renderVoiceSelectionDemo({
     <VoiceSelectionDemo
       activeFile={activeFile}
       activeThreadId={activeThreadId}
+      comments={comments}
       files={files}
       onAsk={onAsk}
       onDeleteComment={onDeleteComment}
@@ -198,14 +212,18 @@ describe("VoiceSelectionDemo", () => {
     const context = buildReviewRoomContext({
       activeFile: "src/review/diagram.ts",
       activeThreadId: "thr_issue",
+      comments: draftComments,
       selection: selectedCode,
+      selectedCommentId: "draft_1",
       threads: [completedThread],
     });
 
     expect(context.selectedCode).toEqual(selectedCode);
+    expect(context.selectedDraftComment?.id).toBe("draft_1");
     expect(context.activeThread?.title).toBe("Found issue");
     expect(context.activeThread?.markdownExcerpt).toContain("validation issue");
     expect(context.popupText).toContain("Focused thread: Found issue");
+    expect(context.popupText).toContain("Selected draft comment: draft_1");
   });
 
   it("resolves follow-up target from the focused Codex thread", () => {
@@ -217,6 +235,21 @@ describe("VoiceSelectionDemo", () => {
       ok: false,
       message: "Click the relevant Codex thread, then ask the follow-up again.",
     });
+  });
+
+  it("lists draft PR comments for voice with ids and locations", () => {
+    expect(listDraftCommentsForVoice(draftComments)).toEqual([
+      {
+        id: "draft_1",
+        body: "Ask for a clearer README translation.",
+        status: "draft",
+        filePath: "src/review/diagram.ts",
+        side: "new",
+        startLine: 201,
+        endLine: 202,
+        createdAt: "2026-04-29T00:01:00Z",
+      },
+    ]);
   });
 
   it("lists loaded review thread ids and names for voice", () => {
@@ -340,10 +373,13 @@ describe("VoiceSelectionDemo", () => {
             name: "draft_pr_comment",
           }),
           expect.objectContaining({
-            name: "edit_selected_pr_comment",
+            name: "list_pr_comments",
           }),
           expect.objectContaining({
-            name: "delete_selected_pr_comment",
+            name: "edit_pr_comment",
+          }),
+          expect.objectContaining({
+            name: "delete_pr_comment",
           }),
           expect.objectContaining({
             name: "get_review_room_context",
@@ -383,6 +419,9 @@ describe("VoiceSelectionDemo", () => {
     const options = renderVoiceSelectionDemo();
 
     expect(options.instructions).toContain("Usually stay quiet");
+    expect(options.instructions).toContain("Call list_pr_comments");
+    expect(options.instructions).toContain("Call edit_pr_comment");
+    expect(options.instructions).toContain("Call delete_pr_comment");
     expect(options.instructions).toContain("one or two short sentences");
     expect(options.instructions).toContain("concise and precise");
     expect(options.instructions).toContain("For UI commands, call the matching tool and do not add a spoken confirmation");
@@ -466,6 +505,54 @@ describe("VoiceSelectionDemo", () => {
 
     expect(onAsk).toHaveBeenCalledWith("What is the risk in this PR?");
     expect(await screen.findByText("Thread started")).toBeInTheDocument();
+  });
+
+  it("lists, edits, and deletes PR comments by id when realtime tools execute", async () => {
+    const onEditComment = vi.fn(() => ({ status: "updated" as const }));
+    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    const options = renderVoiceSelectionDemo({ onDeleteComment, onEditComment });
+    const listPrComments = options.tools.find((tool) => tool.name === "list_pr_comments");
+    const editPrComment = options.tools.find((tool) => tool.name === "edit_pr_comment");
+    const deletePrComment = options.tools.find((tool) => tool.name === "delete_pr_comment");
+    if (!listPrComments || !editPrComment || !deletePrComment) {
+      throw new Error("Expected PR comment voice tools");
+    }
+
+    expect(listPrComments.execute({})).toEqual({
+      ok: true,
+      comments: [
+        {
+          id: "draft_1",
+          body: "Ask for a clearer README translation.",
+          status: "draft",
+          filePath: "src/review/diagram.ts",
+          side: "new",
+          startLine: 201,
+          endLine: 202,
+          createdAt: "2026-04-29T00:01:00Z",
+        },
+      ],
+    });
+    expect(await screen.findByText("PR comments")).toBeInTheDocument();
+    expect(screen.getByText(/draft_1 - src\/review\/diagram\.ts:L201-L202/)).toBeInTheDocument();
+
+    expect(editPrComment.execute({ commentId: "draft_1", comment: "Ask for Hebrew instead." })).toEqual({
+      ok: true,
+      status: "updated",
+      commentId: "draft_1",
+    });
+
+    expect(onEditComment).toHaveBeenCalledWith("draft_1", "Ask for Hebrew instead.");
+    expect(await screen.findByText("PR comment updated")).toBeInTheDocument();
+
+    expect(deletePrComment.execute({ commentId: "draft_1" })).toEqual({
+      ok: true,
+      status: "deleted",
+      commentId: "draft_1",
+    });
+
+    expect(onDeleteComment).toHaveBeenCalledWith("draft_1");
+    expect(await screen.findByText("PR comment deleted")).toBeInTheDocument();
   });
 
   it("posts a follow-up to the focused thread when the realtime tool executes", async () => {

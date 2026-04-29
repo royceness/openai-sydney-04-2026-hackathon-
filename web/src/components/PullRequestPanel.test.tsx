@@ -21,6 +21,7 @@ describe("PullRequestPanel", () => {
         }}
         activeFile={null}
         activeThreadId={null}
+        comments={[]}
         files={[]}
         onAsk={async () => undefined}
         onDeleteComment={vi.fn()}

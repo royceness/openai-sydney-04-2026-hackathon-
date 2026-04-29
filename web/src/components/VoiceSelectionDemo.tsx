@@ -8,7 +8,7 @@ import {
 } from "realtime-voice-component";
 import { z } from "zod";
 import { getFileContent } from "../api";
-import type { ChangedFile, CodeSelection, FileContentResponse, ReviewThread } from "../types";
+import type { ChangedFile, CodeSelection, DraftComment, FileContentResponse, ReviewThread } from "../types";
 
 type VoicePopup = {
   title: string;
@@ -37,6 +37,7 @@ type ThreadNavigationRequest = {
 export function VoiceSelectionDemo({
   activeFile,
   activeThreadId,
+  comments,
   files,
   onAsk,
   onDeleteComment,
@@ -52,6 +53,7 @@ export function VoiceSelectionDemo({
 }: {
   activeFile: string | null;
   activeThreadId: string | null;
+  comments: DraftComment[];
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
   onDeleteComment: (commentId: string) => DeleteCommentResult;
@@ -71,6 +73,7 @@ export function VoiceSelectionDemo({
   const lastToggleAtRef = useRef(0);
   const activeFileRef = useRef<string | null>(activeFile);
   const activeThreadIdRef = useRef<string | null>(activeThreadId);
+  const commentsRef = useRef<DraftComment[]>(comments);
   const filesRef = useRef<ChangedFile[]>(files);
   const onAskRef = useRef(onAsk);
   const onDeleteCommentRef = useRef(onDeleteComment);
@@ -93,6 +96,10 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
+
+  useEffect(() => {
+    commentsRef.current = comments;
+  }, [comments]);
 
   useEffect(() => {
     filesRef.current = files;
@@ -162,13 +169,15 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "get_review_room_context",
-        description: "Read the current Review Room page context, including selected diff code, selected page text, focused Codex thread, and visible workbench thread summaries. Use this when the user refers to this issue, this thread, the selected text, or what is on the page and the target may be ambiguous.",
+        description: "Read the current Review Room page context, including selected diff code, selected page text, selected draft PR comment, focused Codex thread, and visible workbench thread summaries. Use this when the user refers to this issue, this thread, the selected text, selected comment, or what is on the page and the target may be ambiguous.",
         parameters: z.object({}),
         execute: () => {
           const context = buildReviewRoomContext({
             activeFile: activeFileRef.current,
             activeThreadId: activeThreadIdRef.current,
+            comments: commentsRef.current,
             selection: selectionRef.current,
+            selectedCommentId: selectedDraftCommentId(),
             threads: threadsRef.current,
           });
           setPopup({ title: "Page context", body: context.popupText });
@@ -287,47 +296,50 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
-        name: "edit_selected_pr_comment",
-        description: "Edit the local draft PR comment whose text is currently selected in the PR comments queue.",
-        parameters: z.object({
-          comment: z.string().describe("The replacement PR review comment body."),
-        }),
-        execute: ({ comment }) => {
-          const commentId = selectedDraftCommentId();
-          if (!commentId) {
-            setPopup({ title: "Select comment text", body: "Select text inside a draft PR comment first." });
-            return { ok: true, status: "comment-selection-required" };
-          }
-          const result = onEditCommentRef.current(commentId, comment);
-          if (result.status === "updated") {
-            setPopup({ title: "PR comment updated", body: "Draft comment updated." });
-            return { ok: true, status: "updated" };
-          }
-          if (result.status === "empty") {
-            setPopup({ title: "PR comment", body: "No replacement comment text was provided." });
-            return { ok: false, status: "empty" };
-          }
-          setPopup({ title: "PR comment", body: "Selected draft comment was not found." });
-          return { ok: false, status: "not-found" };
+        name: "list_pr_comments",
+        description: "List all local draft PR comments, including comment id, location, status, and body text.",
+        parameters: z.object({}),
+        execute: () => {
+          const comments = listDraftCommentsForVoice(commentsRef.current);
+          setPopup({ title: "PR comments", body: commentsPopupText(comments) });
+          return { ok: true, comments };
         },
       }),
       defineVoiceTool({
-        name: "delete_selected_pr_comment",
-        description: "Delete the local draft PR comment whose text is currently selected in the PR comments queue.",
-        parameters: z.object({}),
-        execute: () => {
-          const commentId = selectedDraftCommentId();
-          if (!commentId) {
-            setPopup({ title: "Select comment text", body: "Select text inside a draft PR comment first." });
-            return { ok: true, status: "comment-selection-required" };
+        name: "edit_pr_comment",
+        description: "Edit a local draft PR comment by comment id. Use this when the user gives, chooses, or refers to a specific comment id.",
+        parameters: z.object({
+          commentId: z.string().min(1).describe("The local draft PR comment id to edit."),
+          comment: z.string().describe("The replacement PR review comment body."),
+        }),
+        execute: ({ commentId, comment }) => {
+          const result = onEditCommentRef.current(commentId, comment);
+          if (result.status === "updated") {
+            setPopup({ title: "PR comment updated", body: `Updated ${commentId}.` });
+            return { ok: true, status: "updated", commentId };
           }
+          if (result.status === "empty") {
+            setPopup({ title: "PR comment", body: "No replacement comment text was provided." });
+            return { ok: false, status: "empty", commentId };
+          }
+          setPopup({ title: "PR comment", body: `No draft comment matches ${commentId}.` });
+          return { ok: false, status: "not-found", commentId };
+        },
+      }),
+      defineVoiceTool({
+        name: "delete_pr_comment",
+        description: "Delete a local draft PR comment by comment id. Use get_review_room_context first when the user refers to the selected comment without giving an id.",
+        parameters: z.object({
+          commentId: z.string().min(1).describe("The local draft PR comment id to delete."),
+        }),
+        execute: ({ commentId }) => {
           const result = onDeleteCommentRef.current(commentId);
           if (result.status === "deleted") {
-            setPopup({ title: "PR comment deleted", body: "Draft comment deleted." });
-            return { ok: true, status: "deleted" };
+            setPopup({ title: "PR comment deleted", body: `Deleted ${commentId}.` });
+            return { ok: true, status: "deleted", commentId };
           }
-          setPopup({ title: "PR comment", body: "Selected draft comment was not found." });
-          return { ok: false, status: "not-found" };
+          setPopup({ title: "PR comment", body: `No draft comment matches ${commentId}.` });
+          return { ok: false, status: "not-found", commentId };
         },
       }),
       defineVoiceTool({
@@ -417,7 +429,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Usually stay quiet. When the user asks you to say, explain, or answer something, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For simple questions or guidance you can answer immediately out loud without calling a tool. If you cannot know the answer from current app state, ask for the missing context briefly.",
+        "You are controlling a pull request review UI. Usually stay quiet. When the user asks you to say, explain, or answer something, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For simple questions or guidance you can answer immediately out loud without calling a tool. If you cannot know the answer from current app state, ask for the missing context briefly.",
       audio: { output: { voice: "marin" } },
       onEvent: (event) => {
         logVoiceTranscript(event, {
@@ -577,6 +589,45 @@ function selectedDraftCommentId() {
 function closestCommentId(node: Node | null) {
   const element = node instanceof Element ? node : node?.parentElement;
   return element?.closest<HTMLElement>("[data-comment-id]")?.dataset.commentId ?? null;
+}
+
+export type DraftCommentVoiceSummary = {
+  id: string;
+  body: string;
+  status: DraftComment["status"];
+  filePath: string;
+  side: CodeSelection["side"];
+  startLine: number | null;
+  endLine: number | null;
+  createdAt: string;
+};
+
+export function listDraftCommentsForVoice(comments: DraftComment[]): DraftCommentVoiceSummary[] {
+  return comments.map((comment) => ({
+    id: comment.id,
+    body: comment.body,
+    status: comment.status,
+    filePath: comment.context.filePath,
+    side: comment.context.side,
+    startLine: comment.context.startLine,
+    endLine: comment.context.endLine,
+    createdAt: comment.created_at,
+  }));
+}
+
+function commentsPopupText(comments: DraftCommentVoiceSummary[]) {
+  if (comments.length === 0) {
+    return "No draft PR comments.";
+  }
+  return comments.map((comment) => `${comment.id} - ${commentLocationText(comment)}\n${comment.body}`).join("\n\n");
+}
+
+function commentLocationText(comment: Pick<DraftCommentVoiceSummary, "filePath" | "startLine" | "endLine">) {
+  if (comment.startLine === null || comment.endLine === null) {
+    return comment.filePath;
+  }
+  const lineLabel = comment.startLine === comment.endLine ? `L${comment.startLine}` : `L${comment.startLine}-L${comment.endLine}`;
+  return `${comment.filePath}:${lineLabel}`;
 }
 
 export type FileNavigationResult =
@@ -825,13 +876,16 @@ type TranscriptRefs = {
 type ReviewRoomContextInput = {
   activeFile: string | null;
   activeThreadId: string | null;
+  comments?: DraftComment[];
   selection: CodeSelection | null;
+  selectedCommentId?: string | null;
   threads: ReviewThread[];
 };
 
 export type ReviewRoomVoiceContext = {
   activeFile: string | null;
   selectedCode: CodeSelection | null;
+  selectedDraftComment: DraftCommentVoiceSummary | null;
   selectedPageText: string | null;
   activeThread: ThreadVoiceSummary | null;
   threads: ThreadVoiceSummary[];
@@ -885,19 +939,23 @@ export type ThreadSearchMatch = {
 export function buildReviewRoomContext({
   activeFile,
   activeThreadId,
+  comments = [],
   selection,
+  selectedCommentId = null,
   threads,
 }: ReviewRoomContextInput): ReviewRoomVoiceContext {
   const summaries = threads.map(summarizeThreadForVoice);
   const activeThread = summaries.find((thread) => thread.id === activeThreadId) ?? null;
+  const selectedDraftComment = selectedCommentId ? listDraftCommentsForVoice(comments).find((comment) => comment.id === selectedCommentId) ?? null : null;
   const selectedPageText = selectedPageTextForVoice();
   return {
     activeFile,
     selectedCode: selection,
+    selectedDraftComment,
     selectedPageText,
     activeThread,
     threads: summaries,
-    popupText: contextPopupText(selection, selectedPageText, activeThread),
+    popupText: contextPopupText(selection, selectedDraftComment, selectedPageText, activeThread),
   };
 }
 
@@ -1046,9 +1104,15 @@ function selectedPageTextForVoice() {
   return text || null;
 }
 
-function contextPopupText(selection: CodeSelection | null, selectedPageText: string | null, activeThread: ThreadVoiceSummary | null) {
+function contextPopupText(
+  selection: CodeSelection | null,
+  selectedDraftComment: DraftCommentVoiceSummary | null,
+  selectedPageText: string | null,
+  activeThread: ThreadVoiceSummary | null,
+) {
   const parts = [
     selection ? selectedLocationMessage(selection) : "No diff code is selected.",
+    selectedDraftComment ? `Selected draft comment: ${selectedDraftComment.id} (${commentLocationText(selectedDraftComment)})` : "No draft PR comment is selected.",
     activeThread ? `Focused thread: ${activeThread.title}` : "No Codex thread is focused.",
   ];
   if (selectedPageText) {

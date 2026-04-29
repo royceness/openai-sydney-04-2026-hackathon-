@@ -1,9 +1,10 @@
-import type { ChangedFile, CodeSelection, PullRequestInfo, ReviewThread } from "../types";
+import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewThread } from "../types";
 import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 
 export function PullRequestPanel({
   activeFile,
   activeThreadId,
+  comments,
   files,
   onAsk,
   onDeleteComment,
@@ -19,6 +20,7 @@ export function PullRequestPanel({
 }: {
   activeFile: string | null;
   activeThreadId: string | null;
+  comments: DraftComment[];
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
   onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
@@ -53,6 +55,7 @@ export function PullRequestPanel({
         <VoiceSelectionDemo
           activeFile={activeFile}
           activeThreadId={activeThreadId}
+          comments={comments}
           files={files}
           onAsk={onAsk}
           onDeleteComment={onDeleteComment}
