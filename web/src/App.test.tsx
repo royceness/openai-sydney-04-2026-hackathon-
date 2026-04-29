@@ -41,11 +41,19 @@ vi.mock("./api", () => ({
     pr,
     files,
     threads: [],
+    comments: [],
   })),
   createThread: vi.fn(),
   getBootstrapPrUrl: vi.fn(),
   getFileDiff: vi.fn(async () => ({ file_path: "README", diff: files[0].patch })),
   getReview: vi.fn(),
+  publishComments: vi.fn(async ({ comments }: { comments: DraftComment[] }) => ({
+    comments: comments.map((comment) => ({
+      ...comment,
+      status: "published" as const,
+      github_comment_url: "https://github.com/octocat/Hello-World/pull/1#discussion_r1",
+    })),
+  })),
 }));
 
 vi.mock("./components/ChangedFilesPane", () => ({
@@ -74,18 +82,29 @@ vi.mock("./components/DiffPane", () => ({
 
 vi.mock("./components/AIWorkbench", () => ({
   AIWorkbench: ({
+    commentError,
     comments,
+    onPublishComments,
     pendingCommentBody,
   }: {
+    commentError: string | null;
     comments: DraftComment[];
+    onPublishComments: () => Promise<void>;
     pendingCommentBody: string | null;
     threads: ReviewThread[];
   }) => (
     <div>
       {pendingCommentBody ? <div>Pending: {pendingCommentBody}</div> : null}
+      {commentError ? <div>Comment error: {commentError}</div> : null}
+      <button onClick={() => void onPublishComments()} type="button">
+        Publish comments
+      </button>
       {comments.map((comment) => (
         <div key={comment.id}>
           <div>Comment: {comment.body}</div>
+          <div>Status: {comment.status}</div>
+          {comment.github_comment_url ? <a href={comment.github_comment_url}>GitHub comment</a> : null}
+          {comment.error ? <div>Comment failed: {comment.error}</div> : null}
           <div>
             Location: {comment.context.filePath}:L{comment.context.startLine}-L{comment.context.endLine}
           </div>
@@ -98,6 +117,7 @@ vi.mock("./components/AIWorkbench", () => ({
 describe("App draft comments", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/?pr=https://github.com/octocat/Hello-World/pull/1");
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -129,4 +149,49 @@ describe("App draft comments", () => {
     expect(screen.getByText("Location: README:L1-L2")).toBeInTheDocument();
   });
 
+  it("publishes local draft comments to GitHub", async () => {
+    const api = await import("./api");
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Select README lines"));
+    await userEvent.click(screen.getByText("Draft without selection"));
+    await userEvent.click(screen.getByText("Publish comments"));
+
+    expect(api.publishComments).toHaveBeenCalledWith({
+      reviewId: "rev_1",
+      comments: [
+        expect.objectContaining({
+          body: "this needs tests",
+          status: "draft",
+          context: expect.objectContaining({
+            filePath: "README",
+            startLine: 1,
+            endLine: 2,
+          }),
+        }),
+      ],
+    });
+    expect(await screen.findByText("Status: published")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "GitHub comment" })).toHaveAttribute(
+      "href",
+      "https://github.com/octocat/Hello-World/pull/1#discussion_r1",
+    );
+  });
+
+  it("keeps comments retryable when GitHub publishing fails", async () => {
+    const api = await import("./api");
+    vi.mocked(api.publishComments).mockRejectedValueOnce(new Error("GitHub rejected the line"));
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Draft without selection"));
+    await userEvent.click(screen.getByText("Publish comments"));
+
+    expect(await screen.findByText("Status: failed")).toBeInTheDocument();
+    expect(screen.getByText("Comment error: GitHub rejected the line")).toBeInTheDocument();
+    expect(screen.getByText("Comment failed: GitHub rejected the line")).toBeInTheDocument();
+  });
 });

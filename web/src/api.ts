@@ -3,8 +3,10 @@ import type {
   CreateFollowUpResponse,
   CreateReviewResponse,
   CreateThreadResponse,
+  DraftComment,
   FileContentResponse,
   FileDiffResponse,
+  PublishCommentsResponse,
   ReviewSession,
   ReviewThread,
 } from "./types";
@@ -122,4 +124,25 @@ export async function createFollowUp({
     },
   );
   return readJson<CreateFollowUpResponse>(response);
+}
+
+export async function publishComments({
+  reviewId,
+  comments,
+}: {
+  reviewId: string;
+  comments: DraftComment[];
+}): Promise<PublishCommentsResponse> {
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/comments/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      comments: comments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        context: comment.context,
+      })),
+    }),
+  });
+  return readJson<PublishCommentsResponse>(response);
 }

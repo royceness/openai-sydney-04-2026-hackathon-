@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createFollowUp, createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview } from "./api";
+import { createFollowUp, createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview, publishComments } from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
@@ -28,6 +28,7 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
+  const [commentError, setCommentError] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
   const commentsRef = useRef<DraftComment[]>([]);
 
@@ -39,6 +40,7 @@ export default function App() {
     setActiveThreadId(null);
     setComments([]);
     setPendingCommentBody(null);
+    setCommentError(null);
     try {
       const created = await createReview(prUrl);
       const nextReview = {
@@ -48,6 +50,7 @@ export default function App() {
         threads: created.threads,
       };
       setReview(nextReview);
+      setComments(created.comments);
       setLoadState("ready");
       const firstPatchFile = created.files.find((file) => file.patch);
       if (firstPatchFile) {
@@ -282,6 +285,44 @@ export default function App() {
     return { status: "deleted" as const };
   }, []);
 
+  const handlePublishComments = useCallback(async () => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      return;
+    }
+    const publishableComments = commentsRef.current.filter((comment) => comment.status === "draft" || comment.status === "failed");
+    if (publishableComments.length === 0) {
+      return;
+    }
+
+    const publishableIds = new Set(publishableComments.map((comment) => comment.id));
+    setCommentError(null);
+    setComments((current) =>
+      current.map((comment) =>
+        publishableIds.has(comment.id) ? { ...comment, status: "publishing" as const, error: null } : comment,
+      ),
+    );
+
+    try {
+      const response = await publishComments({ reviewId: context.reviewId, comments: publishableComments });
+      const publishedById = new Map(response.comments.map((comment) => [comment.id, comment]));
+      setComments((current) =>
+        current.map((comment) => {
+          const published = publishedById.get(comment.id);
+          return published ? { ...comment, ...published, error: null } : comment;
+        }),
+      );
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to publish comments";
+      setCommentError(message);
+      setComments((current) =>
+        current.map((comment) =>
+          publishableIds.has(comment.id) ? { ...comment, status: "failed" as const, error: message } : comment,
+        ),
+      );
+    }
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -335,6 +376,7 @@ export default function App() {
       <AIWorkbench
         activeThreadId={activeThreadId}
         comments={comments}
+        commentError={commentError}
         pendingCommentBody={pendingCommentBody}
         threads={review.threads}
         selection={selection}
@@ -344,6 +386,7 @@ export default function App() {
         onDeleteComment={handleDeleteComment}
         onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
+        onPublishComments={handlePublishComments}
       />
     </div>
   );

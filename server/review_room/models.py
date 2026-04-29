@@ -90,6 +90,7 @@ class CreateReviewResponse(BaseModel):
     pr: PullRequestInfo
     files: list[ChangedFile]
     threads: list[ReviewThread]
+    comments: list[DraftComment] = Field(default_factory=list)
 
 
 class FileDiffResponse(BaseModel):
@@ -125,3 +126,25 @@ class CreateFollowUpRequest(BaseModel):
 class CreateFollowUpResponse(BaseModel):
     thread_id: str
     status: Literal["queued", "running", "complete", "failed"]
+
+
+class PublishCommentRequest(BaseModel):
+    id: str
+    body: str
+    context: CodeSelection
+
+
+class PublishCommentsRequest(BaseModel):
+    comments: list[PublishCommentRequest]
+
+
+class PublishedComment(BaseModel):
+    id: str
+    body: str
+    context: CodeSelection
+    status: Literal["published"] = "published"
+    github_comment_url: str
+
+
+class PublishCommentsResponse(BaseModel):
+    comments: list[PublishedComment]

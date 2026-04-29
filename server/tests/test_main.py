@@ -6,11 +6,13 @@ from fastapi.testclient import TestClient
 from review_room import main
 from review_room.agent import AgentResult
 from review_room.github import ParsedPullRequestUrl
-from review_room.models import ChangedFile, PullRequestInfo
+from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
 from review_room.store import ReviewStore
 
 
 class FakeGitHubClient:
+    published_comments: list[PublishCommentRequest] = []
+
     async def fetch_pull_request(self, parsed: ParsedPullRequestUrl):
         return (
             PullRequestInfo(
@@ -35,6 +37,19 @@ class FakeGitHubClient:
                     patch="@@ -1 +1 @@\n-old\n+new",
                 )
             ],
+        )
+
+    async def create_pull_request_review_comment(
+        self,
+        pr: PullRequestInfo,
+        comment: PublishCommentRequest,
+    ) -> PublishedComment:
+        self.published_comments.append(comment)
+        return PublishedComment(
+            id=comment.id,
+            body=comment.body,
+            context=comment.context,
+            github_comment_url=f"https://github.com/{pr.owner}/{pr.repo}/pull/{pr.number}#discussion_r1",
         )
 
 
@@ -178,6 +193,79 @@ def test_get_file_content_rejects_files_outside_changed_file_list(tmp_path: Path
 
     assert content_response.status_code == 404
     assert content_response.json() == {"detail": "Changed file not found"}
+
+
+def test_publish_comments_posts_to_github_and_persists_urls(tmp_path: Path, monkeypatch) -> None:
+    fake_github = FakeGitHubClient()
+    fake_github.published_comments = []
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", fake_github)
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    publish_response = client.post(
+        f"/api/reviews/{review_id}/comments/publish",
+        json={
+            "comments": [
+                {
+                    "id": "draft_1",
+                    "body": "Please add a regression test.",
+                    "context": {
+                        "filePath": "src/review/diagram.ts",
+                        "side": "new",
+                        "startLine": 1,
+                        "endLine": 1,
+                        "selectedText": "new",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert publish_response.status_code == 200
+    assert publish_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
+    assert fake_github.published_comments[0].body == "Please add a regression test."
+    session_response = client.get(f"/api/reviews/{review_id}")
+    assert session_response.json()["comments"][0]["status"] == "published"
+    assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
+
+
+def test_publish_comments_rejects_unknown_changed_file(tmp_path: Path, monkeypatch) -> None:
+    fake_github = FakeGitHubClient()
+    fake_github.published_comments = []
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", fake_github)
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    publish_response = client.post(
+        f"/api/reviews/{review_id}/comments/publish",
+        json={
+            "comments": [
+                {
+                    "id": "draft_1",
+                    "body": "Please add a regression test.",
+                    "context": {
+                        "filePath": "src/review/other.ts",
+                        "side": "new",
+                        "startLine": 1,
+                        "endLine": 1,
+                        "selectedText": "new",
+                    },
+                }
+            ]
+        },
+    )
+
+    assert publish_response.status_code == 404
+    assert publish_response.json() == {"detail": "Changed file not found: src/review/other.ts"}
+    assert fake_github.published_comments == []
 
 
 def test_create_thread_runs_agent_and_persists_markdown(tmp_path: Path, monkeypatch) -> None:

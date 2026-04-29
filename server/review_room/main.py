@@ -23,8 +23,11 @@ from review_room.models import (
     CreateReviewResponse,
     CreateThreadRequest,
     CreateThreadResponse,
+    DraftComment,
     FileContentResponse,
     FileDiffResponse,
+    PublishCommentsRequest,
+    PublishCommentsResponse,
     ReviewSession,
     ReviewThread,
 )
@@ -159,7 +162,13 @@ async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
     store.save(session)
-    return CreateReviewResponse(review_id=session.id, pr=session.pr, files=session.files, threads=session.threads)
+    return CreateReviewResponse(
+        review_id=session.id,
+        pr=session.pr,
+        files=session.files,
+        threads=session.threads,
+        comments=session.comments,
+    )
 
 
 @app.get("/api/reviews/{review_id}", response_model=ReviewSession)
@@ -291,6 +300,40 @@ async def create_follow_up(
     prompt = build_follow_up_prompt(request.utterance)
     background_tasks.add_task(run_thread_follow_up, store, agent, review_id, thread.id, prompt, request.utterance)
     return CreateFollowUpResponse(thread_id=thread.id, status=thread.status)
+
+
+@app.post("/api/reviews/{review_id}/comments/publish", response_model=PublishCommentsResponse)
+async def publish_comments(review_id: str, request: PublishCommentsRequest) -> PublishCommentsResponse:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    changed_paths = {file.path for file in session.files}
+    for comment in request.comments:
+        if comment.context.file_path not in changed_paths:
+            raise HTTPException(status_code=404, detail=f"Changed file not found: {comment.context.file_path}")
+        if not comment.body.strip():
+            raise HTTPException(status_code=400, detail="Comment body is required")
+
+    published_comments = []
+    try:
+        for comment in request.comments:
+            published_comments.append(await github.create_pull_request_review_comment(session.pr, comment))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GitHubError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    published_by_id = {comment.id: comment for comment in published_comments}
+    remaining = [comment for comment in session.comments if comment.id not in published_by_id]
+    session.comments = [
+        *remaining,
+        *[DraftComment(**comment.model_dump()) for comment in published_comments],
+    ]
+    session.updated_at = datetime.now(timezone.utc)
+    store.save(session)
+    return PublishCommentsResponse(comments=published_comments)
 
 
 def _requested_line_window(

@@ -1,6 +1,7 @@
 import pytest
 
-from review_room.github import ParsedPullRequestUrl, map_changed_file, map_pull_request, parse_pr_url
+from review_room.github import ParsedPullRequestUrl, build_review_comment_payload, map_changed_file, map_pull_request, parse_pr_url
+from review_room.models import CodeSelection, PublishCommentRequest, PullRequestInfo
 
 
 def test_parse_pr_url_accepts_public_pull_request_url() -> None:
@@ -53,3 +54,71 @@ def test_map_changed_file_keeps_patch_and_counts() -> None:
     assert mapped.deletions == 17
     assert mapped.patch.startswith("@@")
 
+
+def test_build_review_comment_payload_uses_line_side_and_pr_head_sha() -> None:
+    pr = PullRequestInfo(
+        owner="acme",
+        repo="review-room",
+        number=247,
+        title="Improve diagram layout",
+        url="https://github.com/acme/review-room/pull/247",
+        base_ref="main",
+        head_ref="feature/diagram",
+        base_sha="abc",
+        head_sha="def",
+    )
+    comment = PublishCommentRequest(
+        id="draft_1",
+        body="Please add a regression test.",
+        context=CodeSelection(
+            filePath="src/review/diagram.ts",
+            side="new",
+            startLine=42,
+            endLine=44,
+            selectedText="function buildDiagram() {}",
+        ),
+    )
+
+    assert build_review_comment_payload(pr, comment) == {
+        "body": "Please add a regression test.",
+        "commit_id": "def",
+        "path": "src/review/diagram.ts",
+        "line": 44,
+        "side": "RIGHT",
+        "start_line": 42,
+        "start_side": "RIGHT",
+    }
+
+
+def test_build_review_comment_payload_supports_old_side_single_line_with_selection_commit() -> None:
+    pr = PullRequestInfo(
+        owner="acme",
+        repo="review-room",
+        number=247,
+        title="Improve diagram layout",
+        url="https://github.com/acme/review-room/pull/247",
+        base_ref="main",
+        head_ref="feature/diagram",
+        base_sha="abc",
+        head_sha="def",
+    )
+    comment = PublishCommentRequest(
+        id="draft_1",
+        body="This removal needs explanation.",
+        context=CodeSelection(
+            filePath="src/review/diagram.ts",
+            side="old",
+            startLine=12,
+            endLine=12,
+            selectedText="old()",
+            commitSha="selection-sha",
+        ),
+    )
+
+    assert build_review_comment_payload(pr, comment) == {
+        "body": "This removal needs explanation.",
+        "commit_id": "selection-sha",
+        "path": "src/review/diagram.ts",
+        "line": 12,
+        "side": "LEFT",
+    }
