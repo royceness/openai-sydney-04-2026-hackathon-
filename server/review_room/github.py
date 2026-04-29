@@ -7,7 +7,14 @@ from dataclasses import dataclass
 
 import httpx
 
-from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
+from review_room.models import (
+    ChangedFile,
+    PublishedComment,
+    PublishCommentRequest,
+    PullRequestInfo,
+    ReviewSubmission,
+    ReviewSubmissionEvent,
+)
 
 
 PR_URL_RE = re.compile(
@@ -121,6 +128,36 @@ class GitHubClient:
             github_comment_url=data["html_url"],
         )
 
+    async def create_pull_request_review(
+        self,
+        pr: PullRequestInfo,
+        comments: list[PublishCommentRequest],
+        body: str,
+        event: ReviewSubmissionEvent,
+    ) -> tuple[list[PublishedComment], ReviewSubmission]:
+        headers = await self._headers()
+        payload = build_pull_request_review_payload(pr, comments, body, event)
+        url = f"https://api.github.com/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}/reviews"
+        async with httpx.AsyncClient(headers=headers, timeout=30.0, follow_redirects=True) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code >= 400:
+                raise GitHubError(f"GitHub PR review request failed with HTTP {response.status_code}: {response.text}")
+            data = response.json()
+
+        review_url = data["html_url"]
+        return (
+            [
+                PublishedComment(
+                    id=comment.id,
+                    body=comment.body,
+                    context=comment.context,
+                    github_comment_url=review_url,
+                )
+                for comment in comments
+            ],
+            ReviewSubmission(body=body.strip(), event=event, github_review_url=review_url),
+        )
+
 
 def map_pull_request(parsed: ParsedPullRequestUrl, data: dict) -> PullRequestInfo:
     return PullRequestInfo(
@@ -160,6 +197,47 @@ def build_review_comment_payload(pr: PullRequestInfo, comment: PublishCommentReq
     payload: dict[str, object] = {
         "body": comment.body,
         "commit_id": context.commit_sha or pr.head_sha,
+        "path": context.file_path,
+        "line": end_line,
+        "side": side,
+    }
+    if start_line != end_line:
+        payload["start_line"] = start_line
+        payload["start_side"] = side
+    return payload
+
+
+def build_pull_request_review_payload(
+    pr: PullRequestInfo,
+    comments: list[PublishCommentRequest],
+    body: str,
+    event: ReviewSubmissionEvent,
+) -> dict[str, object]:
+    trimmed_body = body.strip()
+    if event in {"comment", "request_changes"} and not trimmed_body:
+        raise ValueError("A discussion comment is required for this review action")
+
+    payload: dict[str, object] = {
+        "commit_id": pr.head_sha,
+        "event": event.upper(),
+    }
+    if trimmed_body:
+        payload["body"] = trimmed_body
+    if comments:
+        payload["comments"] = [build_review_comment_item(comment) for comment in comments]
+    return payload
+
+
+def build_review_comment_item(comment: PublishCommentRequest) -> dict[str, object]:
+    context = comment.context
+    if context.start_line is None or context.end_line is None:
+        raise ValueError("Published PR comments require selected line numbers")
+
+    start_line = min(context.start_line, context.end_line)
+    end_line = max(context.start_line, context.end_line)
+    side = "RIGHT" if context.side == "new" else "LEFT"
+    payload: dict[str, object] = {
+        "body": comment.body,
         "path": context.file_path,
         "line": end_line,
         "side": side,

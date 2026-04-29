@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { CodeReference, CodeSelection, DraftComment, ReviewThread } from "../types";
+import type { CodeReference, CodeSelection, DraftComment, ReviewSubmission, ReviewSubmissionEvent, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
 type ThreadNavigationRequest = {
@@ -13,6 +13,7 @@ export function AIWorkbench({
   comments,
   commentError,
   pendingCommentBody,
+  submission,
   threads,
   selection,
   threadError,
@@ -22,12 +23,15 @@ export function AIWorkbench({
   onNavigateReference,
   onFollowUp,
   onPublishComments,
+  onSetReviewSubmissionBody,
+  onSetReviewSubmissionEvent,
   threadNavigationRequest,
 }: {
   activeThreadId: string | null;
   comments: DraftComment[];
   commentError: string | null;
   pendingCommentBody: string | null;
+  submission: ReviewSubmission;
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
@@ -36,7 +40,9 @@ export function AIWorkbench({
   onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
-  onPublishComments: () => Promise<void>;
+  onPublishComments: (body: string, event: ReviewSubmissionEvent | null) => Promise<void>;
+  onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
+  onSetReviewSubmissionEvent: (event: ReviewSubmissionEvent) => Promise<ReviewSubmission>;
   threadNavigationRequest: ThreadNavigationRequest | null;
 }) {
   const [utterance, setUtterance] = useState("");
@@ -44,11 +50,23 @@ export function AIWorkbench({
   const [commentsOpen, setCommentsOpen] = useState(true);
   const [flashedThreadId, setFlashedThreadId] = useState<string | null>(null);
   const [publishingComments, setPublishingComments] = useState(false);
+  const [submissionBody, setSubmissionBody] = useState(submission.body);
+  const [submissionSaving, setSubmissionSaving] = useState(false);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
   const threadElementRefs = useRef(new Map<string, HTMLElement>());
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
   const publishableCommentCount = comments.filter((comment) => comment.status === "draft" || comment.status === "failed").length;
   const hasPublishingComment = comments.some((comment) => comment.status === "publishing");
+  const canSubmitReview =
+    !publishingComments &&
+    !hasPublishingComment &&
+    (publishableCommentCount > 0 || submissionBody.trim().length > 0 || submission.event === "approve") &&
+    (submission.event !== "comment" || submissionBody.trim().length > 0) &&
+    (submission.event !== "request_changes" || submissionBody.trim().length > 0);
+
+  useEffect(() => {
+    setSubmissionBody(submission.body);
+  }, [submission.body]);
 
   useEffect(() => {
     const newThreadIds = threads.map((thread) => thread.id).filter((threadId) => !knownThreadIdsRef.current.has(threadId));
@@ -134,25 +152,65 @@ export function AIWorkbench({
           {commentsOpen ? (
             <div className="space-y-3 px-4 pb-4">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs text-slate-500">
-                  {publishableCommentCount > 0
-                    ? `${publishableCommentCount} ready to publish`
-                    : comments.length > 0
-                      ? "No unpublished drafts"
-                      : "No comments drafted"}
-                </div>
+                <div className="text-xs text-slate-500">{submissionStatusText(publishableCommentCount, comments.length, submission)}</div>
                 <button
                   className="inline-flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={publishableCommentCount === 0 || publishingComments || hasPublishingComment}
+                  disabled={!canSubmitReview}
                   onClick={() => {
                     setPublishingComments(true);
-                    void onPublishComments().finally(() => setPublishingComments(false));
+                    void onPublishComments(submissionBody, submission.event).finally(() => setPublishingComments(false));
                   }}
                   type="button"
                 >
                   <UploadIcon />
-                  {publishingComments || hasPublishingComment ? "Publishing" : "Publish"}
+                  {publishingComments || hasPublishingComment ? "Submitting" : submitButtonLabel(submission.event)}
                 </button>
+              </div>
+              <div className="rounded-md border border-slate-800 bg-slate-950/80 p-3">
+                <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="review-discussion">
+                  Discussion comment
+                </label>
+                <textarea
+                  className="mt-2 min-h-24 w-full resize-y rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm leading-6 text-slate-100 outline-none ring-violet-500/30 placeholder:text-slate-600 focus:ring-4"
+                  id="review-discussion"
+                  onBlur={() => {
+                    if (submissionBody !== submission.body) {
+                      setSubmissionSaving(true);
+                      void onSetReviewSubmissionBody(submissionBody).finally(() => setSubmissionSaving(false));
+                    }
+                  }}
+                  onChange={(event) => setSubmissionBody(event.target.value)}
+                  placeholder="Leave a top-level review comment..."
+                  value={submissionBody}
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {(["comment", "approve", "request_changes"] as const).map((event) => (
+                    <button
+                      className={
+                        submission.event === event
+                          ? "rounded-md border border-violet-400 bg-violet-500/20 px-3 py-1.5 text-xs font-semibold text-violet-100"
+                          : "rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-violet-500/60"
+                      }
+                      key={event}
+                      onClick={() => {
+                        setSubmissionSaving(true);
+                        void onSetReviewSubmissionEvent(event).finally(() => setSubmissionSaving(false));
+                      }}
+                      type="button"
+                    >
+                      {reviewEventLabel(event)}
+                    </button>
+                  ))}
+                  {submissionSaving ? <span className="text-xs text-slate-500">Saving</span> : null}
+                  {submission.github_review_url ? (
+                    <a className="ml-auto text-xs text-emerald-300 hover:text-emerald-100" href={submission.github_review_url} rel="noreferrer" target="_blank">
+                      GitHub review
+                    </a>
+                  ) : null}
+                </div>
+                {submissionRequiresBody(submission.event) && !submissionBody.trim() ? (
+                  <div className="mt-2 text-xs text-amber-300">A discussion comment is required for this action.</div>
+                ) : null}
               </div>
               {commentError ? <div className="rounded-md border border-rose-900/70 bg-rose-950/30 p-3 text-sm text-rose-100">{commentError}</div> : null}
               {pendingCommentBody ? (
@@ -451,6 +509,44 @@ function commentStatusClass(status: DraftComment["status"]) {
     return "rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-200";
   }
   return "rounded bg-slate-800 px-2 py-1 text-xs text-slate-300";
+}
+
+function reviewEventLabel(event: ReviewSubmissionEvent) {
+  if (event === "approve") {
+    return "Approve";
+  }
+  if (event === "request_changes") {
+    return "Request changes";
+  }
+  return "Publish comments";
+}
+
+function submitButtonLabel(event: ReviewSubmissionEvent | null) {
+  if (event === "approve") {
+    return "Submit approval";
+  }
+  if (event === "request_changes") {
+    return "Request changes";
+  }
+  if (event === "comment") {
+    return "Submit review";
+  }
+  return "Publish";
+}
+
+function submissionRequiresBody(event: ReviewSubmissionEvent | null) {
+  return event === "comment" || event === "request_changes";
+}
+
+function submissionStatusText(publishableCommentCount: number, totalCommentCount: number, submission: ReviewSubmission) {
+  const commentText =
+    publishableCommentCount > 0
+      ? `${publishableCommentCount} inline draft${publishableCommentCount === 1 ? "" : "s"}`
+      : totalCommentCount > 0
+        ? "No unpublished inline drafts"
+        : "No inline drafts";
+  const decisionText = submission.event ? reviewEventLabel(submission.event).toLowerCase() : "no review action selected";
+  return `${commentText}; ${decisionText}`;
 }
 
 function formatCommentLocation(selection: CodeSelection) {

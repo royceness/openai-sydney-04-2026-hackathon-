@@ -1,4 +1,12 @@
-import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewThread } from "../types";
+import type {
+  ChangedFile,
+  CodeSelection,
+  DraftComment,
+  PullRequestInfo,
+  ReviewSubmission,
+  ReviewSubmissionEvent,
+  ReviewThread,
+} from "../types";
 import type { ThreadStatusAnnouncement } from "../App";
 import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 
@@ -14,8 +22,12 @@ export function PullRequestPanel({
   onFollowUp,
   onNavigateFile,
   onNavigateThread,
+  onSetReviewSubmissionBody,
+  onSetReviewSubmissionEvent,
+  onSubmitReview,
   pr,
   reviewId,
+  submission,
   selection,
   threadStatusAnnouncement,
   threads,
@@ -31,8 +43,12 @@ export function PullRequestPanel({
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   onNavigateThread: (threadId: string) => void;
+  onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
+  onSetReviewSubmissionEvent: (event: ReviewSubmissionEvent) => Promise<ReviewSubmission>;
+  onSubmitReview: (body: string, event: ReviewSubmissionEvent | null) => Promise<void>;
   pr: PullRequestInfo;
   reviewId: string;
+  submission: ReviewSubmission;
   selection: CodeSelection | null;
   threadStatusAnnouncement: ThreadStatusAnnouncement | null;
   threads: ReviewThread[];
@@ -68,7 +84,11 @@ export function PullRequestPanel({
           onNavigateFile={onNavigateFile}
           onNavigateThread={onNavigateThread}
           pr={pr}
+          onSetReviewSubmissionBody={onSetReviewSubmissionBody}
+          onSetReviewSubmissionEvent={onSetReviewSubmissionEvent}
+          onSubmitReview={onSubmitReview}
           reviewId={reviewId}
+          submission={submission}
           selection={selection}
           threadStatusAnnouncement={threadStatusAnnouncement}
           threads={threads}

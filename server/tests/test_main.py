@@ -7,12 +7,13 @@ from review_room import main
 from review_room.agent import AgentResult
 from review_room.github import ParsedPullRequestUrl
 from review_room.init_threads import DEFAULT_INIT_THREAD_PROMPTS
-from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
+from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo, ReviewSubmission
 from review_room.store import ReviewStore
 
 
 class FakeGitHubClient:
     published_comments: list[PublishCommentRequest] = []
+    submitted_reviews: list[dict[str, object]] = []
 
     async def fetch_pull_request(self, parsed: ParsedPullRequestUrl):
         return (
@@ -51,6 +52,28 @@ class FakeGitHubClient:
             body=comment.body,
             context=comment.context,
             github_comment_url=f"https://github.com/{pr.owner}/{pr.repo}/pull/{pr.number}#discussion_r1",
+        )
+
+    async def create_pull_request_review(
+        self,
+        pr: PullRequestInfo,
+        comments: list[PublishCommentRequest],
+        body: str,
+        event: str,
+    ) -> tuple[list[PublishedComment], ReviewSubmission]:
+        self.submitted_reviews.append({"comments": comments, "body": body, "event": event})
+        review_url = f"https://github.com/{pr.owner}/{pr.repo}/pull/{pr.number}#pullrequestreview-1"
+        return (
+            [
+                PublishedComment(
+                    id=comment.id,
+                    body=comment.body,
+                    context=comment.context,
+                    github_comment_url=review_url,
+                )
+                for comment in comments
+            ],
+            ReviewSubmission(body=body.strip(), event=event, github_review_url=review_url),
         )
 
 
@@ -358,9 +381,71 @@ def test_publish_comments_posts_to_github_and_persists_urls(tmp_path: Path, monk
     assert publish_response.status_code == 200
     assert publish_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
     assert fake_github.published_comments[0].body == "Please add a regression test."
+
+
+def test_update_review_submission_persists_body_and_decision(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    body_response = client.patch(f"/api/reviews/{review_id}/submission", json={"body": "Looks good."})
+    event_response = client.patch(f"/api/reviews/{review_id}/submission", json={"event": "approve"})
+
+    assert body_response.status_code == 200
+    assert body_response.json()["body"] == "Looks good."
+    assert event_response.status_code == 200
+    assert event_response.json() == {"body": "Looks good.", "event": "approve", "github_review_url": None}
+    assert client.get(f"/api/reviews/{review_id}").json()["submission"]["event"] == "approve"
+
+
+def test_publish_comments_can_submit_github_review_with_decision_and_body(tmp_path: Path, monkeypatch) -> None:
+    fake_github = FakeGitHubClient()
+    fake_github.published_comments = []
+    fake_github.submitted_reviews = []
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", fake_github)
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    comment_response = client.post(
+        f"/api/reviews/{review_id}/comments",
+        json={
+            "body": "Please add a regression test.",
+            "context": {
+                "filePath": "src/review/diagram.ts",
+                "side": "new",
+                "startLine": 1,
+                "endLine": 1,
+                "selectedText": "new",
+            },
+        },
+    )
+    comment_id = comment_response.json()["id"]
+
+    publish_response = client.post(
+        f"/api/reviews/{review_id}/comments/publish",
+        json={"comment_ids": [comment_id], "body": "Please address this before merge.", "event": "request_changes"},
+    )
+
+    assert publish_response.status_code == 200
+    body = publish_response.json()
+    assert body["submission"] == {
+        "body": "Please address this before merge.",
+        "event": "request_changes",
+        "github_review_url": "https://github.com/acme/review-room/pull/247#pullrequestreview-1",
+    }
+    assert body["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#pullrequestreview-1"
+    assert fake_github.submitted_reviews[0]["event"] == "request_changes"
+    assert fake_github.submitted_reviews[0]["body"] == "Please address this before merge."
     session_response = client.get(f"/api/reviews/{review_id}")
     assert session_response.json()["comments"][0]["status"] == "published"
-    assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
+    assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#pullrequestreview-1"
 
 
 def test_create_comment_rejects_unknown_changed_file(tmp_path: Path, monkeypatch) -> None:

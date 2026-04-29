@@ -10,12 +10,23 @@ import {
   getReview,
   publishComments,
   updateComment,
+  updateReviewSubmission,
 } from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
 import { PullRequestPanel } from "./components/PullRequestPanel";
-import type { ChangedFile, CodeReference, CodeSelection, DraftComment, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
+import type {
+  ChangedFile,
+  CodeReference,
+  CodeSelection,
+  DraftComment,
+  PullRequestInfo,
+  ReviewContext,
+  ReviewSubmission,
+  ReviewSubmissionEvent,
+  ReviewThread,
+} from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
 
@@ -24,6 +35,7 @@ type ReviewState = {
   pr: PullRequestInfo;
   files: ChangedFile[];
   threads: ReviewThread[];
+  submission: ReviewSubmission;
 };
 
 export type ThreadNavigationRequest = {
@@ -76,6 +88,7 @@ export default function App() {
         pr: created.pr,
         files: created.files,
         threads: created.threads,
+        submission: created.submission,
       };
       setReview(nextReview);
       setComments(created.comments);
@@ -207,6 +220,7 @@ export default function App() {
             pr: session.pr,
             files: session.files,
             threads: session.threads,
+            submission: session.submission,
           });
           setComments(session.comments);
         })
@@ -237,6 +251,7 @@ export default function App() {
           pr: session.pr,
           files: session.files,
           threads: session.threads,
+          submission: session.submission,
         });
         setComments(session.comments);
         if (response.status === "failed") {
@@ -274,6 +289,7 @@ export default function App() {
         pr: session.pr,
         files: session.files,
         threads: session.threads,
+        submission: session.submission,
       });
       setComments(session.comments);
       if (response.status === "failed") {
@@ -355,13 +371,33 @@ export default function App() {
     }
   }, []);
 
-  const handlePublishComments = useCallback(async () => {
+  const handleUpdateSubmissionBody = useCallback(async (body: string) => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      throw new Error("Review is not loaded");
+    }
+    const submission = await updateReviewSubmission({ reviewId: context.reviewId, body });
+    setReview((current) => (current ? { ...current, submission } : current));
+    return submission;
+  }, []);
+
+  const handleUpdateSubmissionEvent = useCallback(async (event: ReviewSubmissionEvent) => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      throw new Error("Review is not loaded");
+    }
+    const submission = await updateReviewSubmission({ reviewId: context.reviewId, event });
+    setReview((current) => (current ? { ...current, submission } : current));
+    return submission;
+  }, []);
+
+  const handlePublishComments = useCallback(async (body: string, event: ReviewSubmissionEvent | null) => {
     const context = reviewContextRef.current;
     if (!context) {
       return;
     }
     const publishableComments = commentsRef.current.filter((comment) => comment.status === "draft" || comment.status === "failed");
-    if (publishableComments.length === 0) {
+    if (publishableComments.length === 0 && !body.trim()) {
       return;
     }
 
@@ -374,7 +410,12 @@ export default function App() {
     );
 
     try {
-      const response = await publishComments({ reviewId: context.reviewId, commentIds: publishableComments.map((comment) => comment.id) });
+      const response = await publishComments({
+        reviewId: context.reviewId,
+        commentIds: publishableComments.map((comment) => comment.id),
+        body,
+        event,
+      });
       const publishedById = new Map(response.comments.map((comment) => [comment.id, comment]));
       setComments((current) =>
         current.map((comment) => {
@@ -382,6 +423,7 @@ export default function App() {
           return published ? { ...comment, ...published, error: null } : comment;
         }),
       );
+      setReview((current) => (current ? { ...current, submission: response.submission } : current));
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Failed to publish comments";
       setCommentError(message);
@@ -441,7 +483,11 @@ export default function App() {
           onNavigateThread={handleNavigateThread}
           pr={review.pr}
           reviewId={review.reviewId}
+          submission={review.submission}
           selection={selection}
+          onSetReviewSubmissionBody={handleUpdateSubmissionBody}
+          onSetReviewSubmissionEvent={handleUpdateSubmissionEvent}
+          onSubmitReview={(body, event) => handlePublishComments(body, event)}
           threadStatusAnnouncement={threadStatusAnnouncement}
           threads={review.threads}
         />
@@ -459,6 +505,7 @@ export default function App() {
         comments={comments}
         commentError={commentError}
         pendingCommentBody={pendingCommentBody}
+        submission={review.submission}
         threadNavigationRequest={threadNavigationRequest}
         threads={review.threads}
         selection={selection}
@@ -469,6 +516,8 @@ export default function App() {
         onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
         onPublishComments={handlePublishComments}
+        onSetReviewSubmissionBody={handleUpdateSubmissionBody}
+        onSetReviewSubmissionEvent={handleUpdateSubmissionEvent}
       />
     </div>
   );

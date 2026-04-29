@@ -34,8 +34,10 @@ from review_room.models import (
     PublishCommentsRequest,
     PublishCommentsResponse,
     ReviewSession,
+    ReviewSubmission,
     ReviewThread,
     UpdateCommentRequest,
+    UpdateReviewSubmissionRequest,
 )
 from review_room.prompting import build_follow_up_prompt, build_review_prompt
 from review_room.store import ReviewStore, stable_review_id
@@ -164,6 +166,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         files=files,
         threads=existing_session.threads if existing_session is not None else [],
         comments=existing_session.comments if existing_session is not None else [],
+        submission=existing_session.submission if existing_session is not None else ReviewSubmission(),
         repo_path=str(repo_path),
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
@@ -185,6 +188,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         files=session.files,
         threads=session.threads,
         comments=session.comments,
+        submission=session.submission,
     )
 
 
@@ -392,10 +396,22 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
         _validate_comment_request(session, comment.body, comment.context)
         comments_to_publish.append(comment)
 
-    published_comments = []
+    if request.event in {"comment", "request_changes"} and not request.body.strip():
+        raise HTTPException(status_code=400, detail="A discussion comment is required for this review action")
+
     try:
-        for comment in comments_to_publish:
-            published_comments.append(await github.create_pull_request_review_comment(session.pr, comment))
+        if request.event is None and not request.body.strip():
+            published_comments = [
+                await github.create_pull_request_review_comment(session.pr, comment) for comment in comments_to_publish
+            ]
+            submission = ReviewSubmission(body="", event=None, github_review_url=None)
+        else:
+            published_comments, submission = await github.create_pull_request_review(
+                session.pr,
+                comments_to_publish,
+                body=request.body,
+                event=request.event or "comment",
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GitHubError as exc:
@@ -406,9 +422,27 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
         DraftComment(**published_by_id[comment.id].model_dump()) if comment.id in published_by_id else comment
         for comment in session.comments
     ]
+    session.submission = submission
     session.updated_at = datetime.now(timezone.utc)
     store.save(session)
-    return PublishCommentsResponse(comments=published_comments)
+    return PublishCommentsResponse(comments=published_comments, submission=submission)
+
+
+@app.patch("/api/reviews/{review_id}/submission", response_model=ReviewSubmission)
+async def update_review_submission(review_id: str, request: UpdateReviewSubmissionRequest) -> ReviewSubmission:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    if request.body is not None:
+        session.submission.body = request.body.strip()
+    if request.event is not None:
+        session.submission.event = request.event
+    session.submission.github_review_url = None
+    session.updated_at = datetime.now(timezone.utc)
+    store.save(session)
+    return session.submission
 
 
 def new_comment_id() -> str:
