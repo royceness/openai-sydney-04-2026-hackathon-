@@ -5,7 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 
 class AgentError(RuntimeError):
@@ -19,7 +19,13 @@ class AgentResult:
 
 
 class CodeAgent(Protocol):
-    async def run_thread(self, repo_path: str, title: str, prompt: str) -> AgentResult:
+    async def run_thread(
+        self,
+        repo_path: str,
+        title: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
         pass
 
 
@@ -34,7 +40,13 @@ class CodexAppServerAgent:
         self._next_id = 1
         self._lock = asyncio.Lock()
 
-    async def run_thread(self, repo_path: str, title: str, prompt: str) -> AgentResult:
+    async def run_thread(
+        self,
+        repo_path: str,
+        title: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
         repo = Path(repo_path)
         if not repo.exists():
             raise AgentError(f"Repo path does not exist: {repo_path}")
@@ -45,7 +57,7 @@ class CodexAppServerAgent:
             codex_thread_id = thread_response["result"]["thread"]["id"]
 
             await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
-            markdown = await self._collect_turn(codex_thread_id)
+            markdown = await self._collect_turn(codex_thread_id, on_delta)
             return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
 
     async def close(self) -> None:
@@ -121,14 +133,17 @@ class CodexAppServerAgent:
                 raise AgentError(f"Codex app-server request failed: {message['error']}")
             return message
 
-    async def _collect_turn(self, codex_thread_id: str) -> str:
+    async def _collect_turn(self, codex_thread_id: str, on_delta: Callable[[str], Awaitable[None]] | None) -> str:
         deltas: list[str] = []
         while True:
             message = await self._read_message(timeout=300)
             method = message.get("method")
             params = message.get("params") or {}
             if method == "item/agentMessage/delta" and params.get("threadId") == codex_thread_id:
-                deltas.append(params.get("delta", ""))
+                delta = params.get("delta", "")
+                deltas.append(delta)
+                if on_delta is not None and delta:
+                    await on_delta(delta)
             elif method == "turn/completed" and params.get("threadId") == codex_thread_id:
                 return "".join(deltas).strip()
             elif method == "error":

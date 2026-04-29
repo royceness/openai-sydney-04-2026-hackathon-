@@ -68,6 +68,28 @@ async def test_codex_agent_can_start_before_first_thread(monkeypatch, tmp_path: 
     assert sent_methods == ["initialize", "thread/start", "turn/start"]
 
 
+@pytest.mark.asyncio
+async def test_codex_agent_forwards_deltas(monkeypatch, tmp_path: Path) -> None:
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr("review_room.agent.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    agent = CodexAppServerAgent(command="codex")
+    deltas: list[str] = []
+
+    result = await agent.run_thread(str(tmp_path), "First", "First prompt", on_delta=append_delta(deltas))
+
+    assert deltas == ["First response"]
+    assert result.markdown == "First response"
+
+
+def append_delta(deltas: list[str]):
+    async def _append(delta: str) -> None:
+        deltas.append(delta)
+
+    return _append
+
+
 class FakeStdin:
     def __init__(self) -> None:
         self.messages: list[dict] = []

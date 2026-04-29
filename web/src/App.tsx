@@ -99,7 +99,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeFile, review]);
+  }, [activeFile, review?.reviewId]);
 
   useEffect(() => {
     if (!review) {
@@ -130,7 +130,7 @@ export default function App() {
           });
         })
         .catch((caught) => setThreadError(caught instanceof Error ? caught.message : "Failed to refresh threads"));
-    }, 2000);
+    }, 500);
 
     return () => window.clearInterval(interval);
   }, [review]);

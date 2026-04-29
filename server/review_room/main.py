@@ -80,14 +80,20 @@ async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     review_id = stable_review_id(parsed.owner, parsed.repo, parsed.number)
+    existing_session = None
+    try:
+        existing_session = store.get(review_id)
+    except KeyError:
+        pass
+
     session = ReviewSession(
         id=review_id,
         pr=pr,
         files=files,
-        threads=[],
-        comments=[],
+        threads=existing_session.threads if existing_session is not None else [],
+        comments=existing_session.comments if existing_session is not None else [],
         repo_path=str(repo_path),
-        created_at=datetime.now(timezone.utc),
+        created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
     store.save(session)
     return CreateReviewResponse(review_id=session.id, pr=session.pr, files=session.files, threads=session.threads)

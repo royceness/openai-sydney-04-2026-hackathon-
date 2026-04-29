@@ -79,7 +79,7 @@ export function AIWorkbench({
                   {thread.context.endLine && thread.context.endLine !== thread.context.startLine ? `-L${thread.context.endLine}` : ""}
                 </div>
               ) : null}
-              {thread.status === "queued" || thread.status === "running" ? (
+              {(thread.status === "queued" || thread.status === "running") && !thread.markdown ? (
                 <p className="mt-3 text-sm text-slate-400">Codex is working...</p>
               ) : null}
               {thread.error ? <p className="mt-3 text-sm text-rose-300">{thread.error}</p> : null}
