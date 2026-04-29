@@ -148,6 +148,46 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
+        name: "list_review_threads",
+        description: "List all currently loaded Review Room workbench threads, including each Review Room thread id, Codex thread id when available, title, status, and source.",
+        parameters: z.object({}),
+        execute: () => {
+          const threads = listThreadSummariesForVoice(threadsRef.current);
+          setPopup({ title: "Review threads", body: threadsPopupText(threads) });
+          return { ok: true, threads };
+        },
+      }),
+      defineVoiceTool({
+        name: "get_review_thread_text",
+        description: "Read Markdown text from a currently loaded Review Room thread by line range. Use 1-based inclusive line numbers.",
+        parameters: z.object({
+          threadId: z.string().describe("The Review Room thread id to read."),
+          startLine: z.number().int().positive().optional().describe("First 1-based line to return. Defaults to line 1."),
+          endLine: z.number().int().positive().optional().describe("Last 1-based line to return. Defaults to the final line."),
+        }),
+        execute: ({ threadId, startLine, endLine }) => {
+          const result = getThreadTextByLineRange(threadsRef.current, threadId, startLine, endLine);
+          if (!result.ok) {
+            setPopup({ title: "Thread text", body: result.message });
+            return result;
+          }
+          setPopup({ title: "Thread text", body: result.text || "(empty)" });
+          return result;
+        },
+      }),
+      defineVoiceTool({
+        name: "search_review_threads",
+        description: "Search all currently loaded Review Room thread titles and Markdown text using simple case-insensitive text matching. This is not a regular expression search.",
+        parameters: z.object({
+          query: z.string().min(1).describe("Plain text to search for. Do not use regular expressions."),
+        }),
+        execute: ({ query }) => {
+          const result = searchThreadsByText(threadsRef.current, query);
+          setPopup({ title: "Thread search", body: threadSearchPopupText(result) });
+          return { ok: true, ...result };
+        },
+      }),
+      defineVoiceTool({
         name: "ask_general_question",
         description: "Create a new review workbench thread for a general pull request question or request. Use this when the user asks a substantive question that is not a follow-up about the focused Codex thread. This includes requests to draw, generate, or show a Mermaid diagram.",
         parameters: z.object({
@@ -271,7 +311,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onEvent: (event) => {
         logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
       },
@@ -512,6 +552,42 @@ type ThreadVoiceSummary = {
   markdownExcerpt: string | null;
 };
 
+export type ReviewThreadVoiceListItem = {
+  id: string;
+  codexThreadId: string | null;
+  title: string;
+  status: ReviewThread["status"];
+  source: ReviewThread["source"];
+};
+
+export type ThreadTextResult =
+  | {
+      ok: true;
+      threadId: string;
+      title: string;
+      startLine: number;
+      endLine: number;
+      totalLines: number;
+      text: string;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+export type ThreadSearchResult = {
+  query: string;
+  matches: ThreadSearchMatch[];
+};
+
+export type ThreadSearchMatch = {
+  threadId: string;
+  codexThreadId: string | null;
+  title: string;
+  line: number;
+  text: string;
+};
+
 export function buildReviewRoomContext({
   activeFile,
   activeThreadId,
@@ -529,6 +605,72 @@ export function buildReviewRoomContext({
     threads: summaries,
     popupText: contextPopupText(selection, selectedPageText, activeThread),
   };
+}
+
+export function listThreadSummariesForVoice(threads: ReviewThread[]): ReviewThreadVoiceListItem[] {
+  return threads.map((thread) => ({
+    id: thread.id,
+    codexThreadId: thread.codex_thread_id ?? null,
+    title: thread.title,
+    status: thread.status,
+    source: thread.source,
+  }));
+}
+
+export function getThreadTextByLineRange(
+  threads: ReviewThread[],
+  threadId: string,
+  startLine = 1,
+  endLine?: number,
+): ThreadTextResult {
+  const thread = threads.find((candidate) => candidate.id === threadId);
+  if (!thread) {
+    return { ok: false, message: `No workbench thread matches ${threadId}.` };
+  }
+  const lines = splitThreadText(thread);
+  const totalLines = lines.length;
+  const requestedEndLine = endLine ?? totalLines;
+  if (startLine > requestedEndLine) {
+    return { ok: false, message: "Start line must be before or equal to end line." };
+  }
+  if (startLine > totalLines) {
+    return { ok: false, message: `${thread.title} only has ${totalLines} line${totalLines === 1 ? "" : "s"}.` };
+  }
+  const clampedEndLine = Math.min(requestedEndLine, totalLines);
+  return {
+    ok: true,
+    threadId: thread.id,
+    title: thread.title,
+    startLine,
+    endLine: clampedEndLine,
+    totalLines,
+    text: lines.slice(startLine - 1, clampedEndLine).join("\n"),
+  };
+}
+
+export function searchThreadsByText(threads: ReviewThread[], query: string): ThreadSearchResult {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return { query: "", matches: [] };
+  }
+
+  const matches: ThreadSearchMatch[] = [];
+  for (const thread of threads) {
+    const fields = [`# ${thread.title}`, ...splitThreadText(thread)];
+    fields.forEach((line, index) => {
+      if (!line.toLowerCase().includes(normalizedQuery)) {
+        return;
+      }
+      matches.push({
+        threadId: thread.id,
+        codexThreadId: thread.codex_thread_id ?? null,
+        title: thread.title,
+        line: index === 0 ? 0 : index,
+        text: truncateForVoice(line, 320),
+      });
+    });
+  }
+  return { query: query.trim(), matches };
 }
 
 export type FollowUpThreadResolution =
@@ -571,6 +713,34 @@ function summarizeThreadForVoice(thread: ReviewThread): ThreadVoiceSummary {
     context: thread.context ?? null,
     markdownExcerpt: thread.markdown ? truncateForVoice(thread.markdown, 1200) : null,
   };
+}
+
+function splitThreadText(thread: ReviewThread) {
+  const text = thread.markdown ?? "";
+  if (!text) {
+    return [""];
+  }
+  return text.split(/\r?\n/);
+}
+
+function threadsPopupText(threads: ReviewThreadVoiceListItem[]) {
+  if (threads.length === 0) {
+    return "No review threads are loaded.";
+  }
+  return threads.map((thread) => `${thread.id} - ${thread.title} (${thread.status})`).join("\n");
+}
+
+function threadSearchPopupText(result: ThreadSearchResult) {
+  if (!result.query) {
+    return "Search query was empty.";
+  }
+  if (result.matches.length === 0) {
+    return `No loaded thread text matches "${result.query}".`;
+  }
+  return result.matches
+    .slice(0, 8)
+    .map((match) => `${match.threadId}${match.line > 0 ? `:L${match.line}` : ":title"} - ${match.text}`)
+    .join("\n");
 }
 
 function selectedPageTextForVoice() {
