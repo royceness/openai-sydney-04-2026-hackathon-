@@ -1,4 +1,4 @@
-import type { CreateReviewResponse, FileDiffResponse, ReviewSession } from "./types";
+import type { CodeSelection, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession } from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -35,3 +35,26 @@ export async function getFileDiff(reviewId: string, filePath: string): Promise<F
   return readJson<FileDiffResponse>(response);
 }
 
+export async function createThread({
+  reviewId,
+  title,
+  utterance,
+  context,
+}: {
+  reviewId: string;
+  title: string;
+  utterance: string;
+  context: CodeSelection | null;
+}): Promise<CreateThreadResponse> {
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/threads`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: "manual",
+      title,
+      utterance,
+      context,
+    }),
+  });
+  return readJson<CreateThreadResponse>(response);
+}

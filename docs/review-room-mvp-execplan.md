@@ -23,6 +23,9 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
 - [x] (2026-04-29T01:42:38Z) Implemented Stage 3 local checkout so review creation reuses a shared clone and creates or reuses a per-PR worktree under `.review-room/repos/`.
 - [x] (2026-04-29T01:42:38Z) Added backend tests for checkout path construction, git command execution boundaries, existing worktree reuse, and review-session `repo_path` persistence.
 - [x] (2026-04-29T01:42:38Z) Ran backend tests after Stage 3 and a live git checkout smoke test.
+- [x] (2026-04-29T01:50:48Z) Implemented Stage 4 manual context-aware Codex threads with a backend thread API, real `codex app-server` adapter, prompt construction, persisted thread lifecycle, frontend manual ask box, Markdown rendering, and polling.
+- [x] (2026-04-29T01:50:48Z) Added backend tests for prompt construction and thread persistence with a fake test agent, plus frontend workbench tests.
+- [x] (2026-04-29T01:50:48Z) Ran backend tests, frontend tests, frontend build, and a live app-server smoke test that returned `OK`.
 
 ## Surprises & Discoveries
 
@@ -37,6 +40,9 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
 
 - Observation: A shared clone plus git worktrees is a better fit than a full clone per PR for large repositories.
   Evidence: The user noted the target repo is huge and requested repo reuse. The implemented smoke test checked out `octocat/Hello-World#1` to `.review-room/repos/octocat/Hello-World/worktrees/pr-1`.
+
+- Observation: The app-server protocol is newline-delimited JSON-RPC without a `jsonrpc` field. Message deltas use `item/agentMessage/delta`, not `agent/message/delta`.
+  Evidence: A direct probe initialized `codex app-server`, started a thread, sent a turn, and observed `item/agentMessage/delta` followed by `turn/completed`.
 
 ## Decision Log
 
@@ -60,9 +66,13 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
   Rationale: Large repositories should not be recloned for every review session. A git worktree gives each PR its own checked-out directory for Codex while the object database and fetched refs are shared by the repository clone.
   Date/Author: 2026-04-29 / Codex
 
+- Decision: For the first manual Codex slice, start one app-server subprocess per Review Room thread and collect the full Markdown response before marking the thread complete.
+  Rationale: This keeps the integration simple, real, and easy to fail visibly. Polling the saved review session is enough for the hackathon slice; SSE streaming can be added later without changing the thread API shape.
+  Date/Author: 2026-04-29 / Codex
+
 ## Outcomes & Retrospective
 
-Stage 1, Stage 2, and Stage 3 are implemented. The app can bootstrap from a configured or query-string PR URL, fetch public GitHub PR metadata and changed files, persist a file-backed review session, render a three-pane UI, show a real unified diff, compute a visible selected-code context from browser text selection, and check out the PR into a reusable local git worktree. Remaining MVP work starts at the next milestone: manual Codex-backed review threads.
+Stage 1 through Stage 4 are implemented. The app can bootstrap from a configured or query-string PR URL, fetch public GitHub PR metadata and changed files, persist a file-backed review session, render a three-pane UI, show a real unified diff, compute a visible selected-code context from browser text selection, check out the PR into a reusable local git worktree, and create a manual Codex-backed workbench thread from the selected context. Remaining MVP work starts at the next milestone: real-time voice tool-calling against the same thread endpoint, then local draft comments.
 
 ## Context and Orientation
 
@@ -107,7 +117,7 @@ Run backend tests:
 
 Current result:
 
-    13 passed in 0.13s
+    15 passed in 0.27s
 
 Run frontend tests:
 
@@ -116,8 +126,8 @@ Run frontend tests:
 
 Current result:
 
-    Test Files  4 passed (4)
-    Tests  6 passed (6)
+    Test Files  5 passed (5)
+    Tests  8 passed (8)
 
 Run the frontend production build:
 
@@ -126,7 +136,7 @@ Run the frontend production build:
 
 Current result:
 
-    ✓ built in 600ms
+    ✓ built in 851ms
 
 Start the backend during development:
 
@@ -195,3 +205,5 @@ Revision note, 2026-04-29: Updated the plan after implementing Stage 1 and Stage
 Revision note, 2026-04-29: Began Stage 3. Local checkout is no longer future debt for this plan; it is the active milestone needed before Codex-backed manual threads.
 
 Revision note, 2026-04-29: Completed Stage 3 using shared repository clones and per-PR git worktrees after the user noted the repository is huge and should be reused across sessions.
+
+Revision note, 2026-04-29: Completed Stage 4 manual Codex-backed workbench threads. This creates the endpoint that the frontend voice component can call through `ask_review_room`.

@@ -38,13 +38,15 @@ class ChangedFile(BaseModel):
 
 
 class CodeSelection(BaseModel):
-    file_path: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    file_path: str = Field(alias="filePath")
     side: Literal["old", "new"]
-    start_line: int | None = None
-    end_line: int | None = None
-    selected_text: str
-    diff_hunk: str | None = None
-    commit_sha: str | None = None
+    start_line: int | None = Field(default=None, alias="startLine")
+    end_line: int | None = Field(default=None, alias="endLine")
+    selected_text: str = Field(alias="selectedText")
+    diff_hunk: str | None = Field(default=None, alias="diffHunk")
+    commit_sha: str | None = Field(default=None, alias="commitSha")
 
 
 class ReviewThread(BaseModel):
@@ -52,6 +54,10 @@ class ReviewThread(BaseModel):
     source: Literal["init", "voice", "manual", "comment"]
     title: str
     status: Literal["queued", "running", "complete", "failed"]
+    prompt: str | None = None
+    utterance: str | None = None
+    context: CodeSelection | None = None
+    codex_thread_id: str | None = None
     markdown: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -90,3 +96,14 @@ class FileDiffResponse(BaseModel):
     file_path: str
     diff: str
 
+
+class CreateThreadRequest(BaseModel):
+    source: Literal["voice", "manual"] = "manual"
+    title: str
+    utterance: str
+    context: CodeSelection | None = None
+
+
+class CreateThreadResponse(BaseModel):
+    thread_id: str
+    status: Literal["queued", "running", "complete", "failed"]

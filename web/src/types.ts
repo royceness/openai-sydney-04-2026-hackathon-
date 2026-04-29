@@ -26,6 +26,10 @@ export type ReviewThread = {
   source: "init" | "voice" | "manual" | "comment";
   title: string;
   status: "queued" | "running" | "complete" | "failed";
+  prompt?: string | null;
+  utterance?: string | null;
+  context?: CodeSelection | null;
+  codex_thread_id?: string | null;
   markdown?: string | null;
   error?: string | null;
   created_at: string;
@@ -55,6 +59,11 @@ export type FileDiffResponse = {
   diff: string;
 };
 
+export type CreateThreadResponse = {
+  thread_id: string;
+  status: "queued" | "running" | "complete" | "failed";
+};
+
 export type CodeSelection = {
   filePath: string;
   side: "old" | "new";
@@ -81,4 +90,3 @@ export type DiffLine = {
   newLine: number | null;
   side: "old" | "new";
 };
-

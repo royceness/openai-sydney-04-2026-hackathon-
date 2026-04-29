@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createReview, getBootstrapPrUrl, getFileDiff } from "./api";
+import { createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview } from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
@@ -23,6 +23,7 @@ export default function App() {
   const [activeDiff, setActiveDiff] = useState<string>("");
   const [diffError, setDiffError] = useState<string | null>(null);
   const [selection, setSelection] = useState<CodeSelection | null>(null);
+  const [threadError, setThreadError] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
 
   const loadReview = useCallback(async (prUrl: string) => {
@@ -113,6 +114,58 @@ export default function App() {
     };
   }, [activeFile, review, selection]);
 
+  useEffect(() => {
+    if (!review || !review.threads.some((thread) => thread.status === "queued" || thread.status === "running")) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      getReview(review.reviewId)
+        .then((session) => {
+          setReview({
+            reviewId: session.id,
+            pr: session.pr,
+            files: session.files,
+            threads: session.threads,
+          });
+        })
+        .catch((caught) => setThreadError(caught instanceof Error ? caught.message : "Failed to refresh threads"));
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [review]);
+
+  const handleAsk = useCallback(
+    async (utterance: string) => {
+      const context = reviewContextRef.current;
+      if (!context) {
+        return;
+      }
+      setThreadError(null);
+      try {
+        const response = await createThread({
+          reviewId: context.reviewId,
+          title: utterance,
+          utterance,
+          context: context.selection ?? null,
+        });
+        const session = await getReview(context.reviewId);
+        setReview({
+          reviewId: session.id,
+          pr: session.pr,
+          files: session.files,
+          threads: session.threads,
+        });
+        if (response.status === "failed") {
+          setThreadError("Thread failed to start");
+        }
+      } catch (caught) {
+        setThreadError(caught instanceof Error ? caught.message : "Failed to create thread");
+      }
+    },
+    [],
+  );
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -145,7 +198,7 @@ export default function App() {
           onSelectionChange={setSelection}
         />
       </main>
-      <AIWorkbench threads={review.threads} />
+      <AIWorkbench threads={review.threads} selection={selection} threadError={threadError} onAsk={handleAsk} />
     </div>
   );
 }
@@ -213,4 +266,3 @@ function PrUrlForm({ onSubmit }: { onSubmit: (prUrl: string) => Promise<void> })
     </div>
   );
 }
-

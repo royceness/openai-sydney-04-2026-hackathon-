@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from review_room import main
+from review_room.agent import AgentResult
 from review_room.github import ParsedPullRequestUrl
 from review_room.models import ChangedFile, PullRequestInfo
 from review_room.store import ReviewStore
@@ -41,6 +42,14 @@ class FakeCheckoutService:
         return Path("/tmp/review-room/repos") / parsed.owner / parsed.repo / "worktrees" / f"pr-{parsed.number}"
 
 
+class FakeAgent:
+    async def run_thread(self, repo_path: str, title: str, prompt: str) -> AgentResult:
+        assert repo_path == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
+        assert title == "Explain this function"
+        assert "User request:" in prompt
+        return AgentResult(codex_thread_id="codex-thread-1", markdown="This function validates the selected input.")
+
+
 def test_bootstrap_returns_configured_pr_url(monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_ROOM_PR_URL", "https://github.com/acme/review-room/pull/247")
     client = TestClient(main.app)
@@ -55,6 +64,7 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
     monkeypatch.setattr(main, "github", FakeGitHubClient())
     monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
     client = TestClient(main.app)
 
     create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
@@ -72,3 +82,37 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
 
     assert diff_response.status_code == 200
     assert diff_response.json() == {"file_path": "src/review/diagram.ts", "diff": "@@ -1 +1 @@\n-old\n+new"}
+
+
+def test_create_thread_runs_agent_and_persists_markdown(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    thread_response = client.post(
+        f"/api/reviews/{review_id}/threads",
+        json={
+            "source": "manual",
+            "title": "Explain this function",
+            "utterance": "Explain this function",
+            "context": {
+                "filePath": "src/review/diagram.ts",
+                "side": "new",
+                "startLine": 10,
+                "endLine": 12,
+                "selectedText": "function buildDiagram() {}",
+            },
+        },
+    )
+
+    assert thread_response.status_code == 200
+    thread_id = thread_response.json()["thread_id"]
+    session_response = client.get(f"/api/reviews/{review_id}")
+    thread = next(item for item in session_response.json()["threads"] if item["id"] == thread_id)
+    assert thread["status"] == "complete"
+    assert thread["codex_thread_id"] == "codex-thread-1"
+    assert thread["markdown"] == "This function validates the selected input."
