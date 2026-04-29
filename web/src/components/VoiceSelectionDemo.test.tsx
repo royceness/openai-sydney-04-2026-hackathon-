@@ -22,10 +22,13 @@ type VoiceToolOption = {
 
 type VoiceControllerOptions = {
   activationMode: string;
+  audio?: unknown;
   auth: unknown;
+  instructions?: string;
   onEvent?: (event: Record<string, unknown>) => void;
   outputMode: string;
   postToolResponse?: boolean;
+  toolChoice?: string;
   tools: VoiceToolOption[];
 };
 
@@ -285,9 +288,10 @@ describe("VoiceSelectionDemo", () => {
     expect(createVoiceControlController).toHaveBeenCalledWith(
       expect.objectContaining({
         activationMode: "vad",
+        audio: { output: { voice: "marin" } },
         auth: { sessionEndpoint: "/api/realtime/session" },
-        outputMode: "tool-only",
-        toolChoice: "required",
+        outputMode: "audio",
+        toolChoice: "auto",
         tools: expect.arrayContaining([
           expect.objectContaining({
             name: "show_selected_text",
@@ -341,6 +345,16 @@ describe("VoiceSelectionDemo", () => {
     expect(screen.getByRole("button", { name: "Start Voice" })).toBeInTheDocument();
   });
 
+  it("instructs the realtime model to stay quiet unless directly answering", () => {
+    const options = renderVoiceSelectionDemo();
+
+    expect(options.instructions).toContain("Usually stay quiet");
+    expect(options.instructions).toContain("one or two short sentences");
+    expect(options.instructions).toContain("concise and precise");
+    expect(options.instructions).toContain("For UI commands, call the matching tool and do not add a spoken confirmation");
+    expect(options.instructions).toContain("answer immediately out loud");
+  });
+
   it("logs completed user voice transcripts without repeating duplicates", () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const options = renderVoiceSelectionDemo();
@@ -360,6 +374,24 @@ describe("VoiceSelectionDemo", () => {
 
     expect(infoSpy).toHaveBeenCalledTimes(1);
     expect(infoSpy).toHaveBeenCalledWith("[voice] user transcript", "draw a mermaid diagram showing anything");
+    infoSpy.mockRestore();
+  });
+
+  it("logs completed assistant speech transcripts without repeating duplicates", () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const options = renderVoiceSelectionDemo();
+
+    options.onEvent?.({
+      type: "response.output_audio_transcript.done",
+      transcript: "Select some text for the comment.",
+    });
+    options.onEvent?.({
+      type: "response.output_audio_transcript.done",
+      transcript: "Select some text for the comment.",
+    });
+
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy).toHaveBeenCalledWith("[voice] assistant speech", "Select some text for the comment.");
     infoSpy.mockRestore();
   });
 
