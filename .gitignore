@@ -1,4 +1,5 @@
 .review-room/
+.DS_Store
 server/.venv/
 web/dist/
 web/node_modules/
