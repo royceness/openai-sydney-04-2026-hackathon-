@@ -10,6 +10,7 @@ export function PullRequestPanel({
   onAsk,
   onDeleteComment,
   onDraftComment,
+  onDraftCommentAtLocation,
   onEditComment,
   onFollowUp,
   onNavigateFile,
@@ -27,6 +28,10 @@ export function PullRequestPanel({
   onAsk: (utterance: string) => Promise<void>;
   onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
   onDraftComment: (body: string) => Promise<{ status: "created" | "selection-required" | "empty" | "failed"; message?: string }>;
+  onDraftCommentAtLocation: (
+    body: string,
+    context: CodeSelection,
+  ) => Promise<{ status: "created" | "empty" | "failed"; message?: string }>;
   onEditComment: (commentId: string, body: string) => Promise<{ status: "updated" | "not-found" | "empty" | "failed"; message?: string }>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
@@ -63,6 +68,7 @@ export function PullRequestPanel({
           onAsk={onAsk}
           onDeleteComment={onDeleteComment}
           onDraftComment={onDraftComment}
+          onDraftCommentAtLocation={onDraftCommentAtLocation}
           onEditComment={onEditComment}
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}

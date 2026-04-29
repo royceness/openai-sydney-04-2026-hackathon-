@@ -319,6 +319,25 @@ export default function App() {
     [addDraftComment],
   );
 
+  const handleDraftCommentAtLocation = useCallback(
+    async (body: string, context: CodeSelection) => {
+      const trimmed = body.trim();
+      if (!trimmed) {
+        return { status: "empty" as const };
+      }
+      try {
+        await addDraftComment(trimmed, context);
+        setCommentError(null);
+        return { status: "created" as const };
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Failed to create comment";
+        setCommentError(message);
+        return { status: "failed" as const, message };
+      }
+    },
+    [addDraftComment],
+  );
+
   const handleEditComment = useCallback(async (commentId: string, body: string) => {
     const trimmed = body.trim();
     if (!trimmed) {
@@ -446,6 +465,7 @@ export default function App() {
           onAsk={(utterance) => handleAsk(utterance, "voice")}
           onDeleteComment={handleDeleteComment}
           onDraftComment={handleDraftComment}
+          onDraftCommentAtLocation={handleDraftCommentAtLocation}
           onEditComment={handleEditComment}
           onFollowUp={(threadId, utterance) => handleFollowUp(threadId, utterance, "voice")}
           onNavigateFile={(filePath) => {

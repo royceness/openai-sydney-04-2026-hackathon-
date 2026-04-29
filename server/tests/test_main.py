@@ -188,6 +188,14 @@ def test_create_review_starts_default_init_threads(tmp_path: Path, monkeypatch) 
     assert all(thread["markdown"] for thread in completed_init_threads)
 
 
+def test_tests_audit_prompt_requests_changed_pr_gap_locations() -> None:
+    tests_audit = next(prompt for prompt in DEFAULT_INIT_THREAD_PROMPTS if prompt.key == "tests-audit")
+
+    assert "For each testing gap" in tests_audit.utterance
+    assert "changed PR file and line or line range" in tests_audit.utterance
+    assert "best represents the untested behavior introduced by this PR" in tests_audit.utterance
+
+
 def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))

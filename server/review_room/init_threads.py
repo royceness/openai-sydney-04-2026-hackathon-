@@ -29,7 +29,9 @@ DEFAULT_INIT_THREAD_PROMPTS: tuple[InitThreadPrompt, ...] = (
         title="Tests audit",
         utterance=(
             "Audit the test coverage for this pull request. Identify existing tests that cover the change, "
-            "missing tests, and the smallest useful tests to add."
+            "missing tests, and the smallest useful tests to add. For each testing gap, include the changed "
+            "PR file and line or line range that best represents the untested behavior introduced by this PR, "
+            "so a reviewer can attach a PR comment to that location."
         ),
     ),
     InitThreadPrompt(

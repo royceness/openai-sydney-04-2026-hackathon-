@@ -26,6 +26,7 @@ describe("PullRequestPanel", () => {
         onAsk={async () => undefined}
         onDeleteComment={vi.fn()}
         onDraftComment={vi.fn()}
+        onDraftCommentAtLocation={vi.fn()}
         onEditComment={vi.fn()}
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}

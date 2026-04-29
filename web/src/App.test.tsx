@@ -76,10 +76,32 @@ vi.mock("./components/ChangedFilesPane", () => ({
 }));
 
 vi.mock("./components/PullRequestPanel", () => ({
-  PullRequestPanel: ({ onDraftComment }: { onDraftComment: (body: string) => Promise<unknown> }) => (
-    <button onClick={() => void onDraftComment("this needs tests")} type="button">
-      Draft without selection
-    </button>
+  PullRequestPanel: ({
+    onDraftComment,
+    onDraftCommentAtLocation,
+  }: {
+    onDraftComment: (body: string) => Promise<unknown>;
+    onDraftCommentAtLocation: (body: string, context: CodeSelection) => Promise<unknown>;
+  }) => (
+    <div>
+      <button onClick={() => void onDraftComment("this needs tests")} type="button">
+        Draft without selection
+      </button>
+      <button
+        onClick={() =>
+          void onDraftCommentAtLocation("location-specific testing gap", {
+            filePath: "README",
+            side: "new",
+            startLine: 1,
+            endLine: 1,
+            selectedText: "",
+          })
+        }
+        type="button"
+      >
+        Draft at README line
+      </button>
+    </div>
   ),
 }));
 
@@ -160,6 +182,17 @@ describe("App draft comments", () => {
     expect(screen.queryByText("Pending: this needs tests")).not.toBeInTheDocument();
     expect(screen.getByText("Comment: this needs tests")).toBeInTheDocument();
     expect(screen.getByText("Location: README:L1-L2")).toBeInTheDocument();
+  });
+
+  it("attaches a requested PR comment to an explicit location", async () => {
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Draft at README line"));
+
+    await screen.findByText("Comment: location-specific testing gap");
+    expect(screen.getByText("Location: README:L1-L1")).toBeInTheDocument();
   });
 
   it("publishes local draft comments to GitHub", async () => {
