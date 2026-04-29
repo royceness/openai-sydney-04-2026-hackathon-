@@ -90,13 +90,19 @@ export type CodeSelection = {
 
 export type DraftComment = {
   id: string;
+  source?: "github" | "draft";
   body: string;
   context: CodeSelection;
-  status: "draft" | "publishing" | "published" | "failed";
-  created_at: string;
+  status: "imported" | "draft" | "publishing" | "published" | "failed";
+  author?: string | null;
+  github_comment_id?: number | null;
   github_comment_url?: string | null;
+  created_at: string;
+  updated_at?: string;
   error?: string | null;
 };
+
+export type ReviewComment = DraftComment;
 
 export type PublishCommentsResponse = {
   comments: PublishedComment[];

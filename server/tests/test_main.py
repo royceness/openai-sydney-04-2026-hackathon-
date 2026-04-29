@@ -7,7 +7,14 @@ from review_room import main
 from review_room.agent import AgentResult
 from review_room.github import ParsedPullRequestUrl
 from review_room.init_threads import DEFAULT_INIT_THREAD_PROMPTS
-from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
+from review_room.models import (
+    ChangedFile,
+    CodeSelection,
+    DraftComment,
+    PublishedComment,
+    PublishCommentRequest,
+    PullRequestInfo,
+)
 from review_room.store import ReviewStore
 
 
@@ -36,6 +43,26 @@ class FakeGitHubClient:
                     additions=48,
                     deletions=17,
                     patch="@@ -1 +1 @@\n-old\n+new",
+                )
+            ],
+            [
+                DraftComment(
+                    id="gh_comment_101",
+                    source="github",
+                    body="Please rename this helper.",
+                    context=CodeSelection(
+                        filePath="src/review/diagram.ts",
+                        side="new",
+                        startLine=1,
+                        endLine=1,
+                        selectedText="new",
+                        diffHunk="@@ -1 +1 @@\n-old\n+new",
+                        commitSha="def",
+                    ),
+                    status="imported",
+                    author="reviewer",
+                    github_comment_id=101,
+                    github_comment_url="https://github.com/acme/review-room/pull/247#discussion_r101",
                 )
             ],
         )
@@ -129,10 +156,12 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
     created = create_response.json()
     assert created["review_id"] == "rev_acme_review_room_247"
     assert created["files"][0]["path"] == "src/review/diagram.ts"
+    assert created["comments"][0]["body"] == "Please rename this helper."
 
     session_response = client.get("/api/reviews/rev_acme_review_room_247")
     assert session_response.status_code == 200
     assert session_response.json()["repo_path"] == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
+    assert session_response.json()["comments"][0]["github_comment_id"] == 101
 
     diff_response = client.get("/api/reviews/rev_acme_review_room_247/files/src/review/diagram.ts/diff")
 
@@ -322,7 +351,8 @@ def test_create_update_and_delete_comment_persists_session_comments(tmp_path: Pa
 
     assert delete_response.status_code == 200
     assert delete_response.json() == {"comment_id": comment["id"], "status": "deleted"}
-    assert client.get(f"/api/reviews/{review_id}").json()["comments"] == []
+    remaining_comments = client.get(f"/api/reviews/{review_id}").json()["comments"]
+    assert [item["id"] for item in remaining_comments] == ["gh_comment_101"]
 
 
 def test_publish_comments_posts_to_github_and_persists_urls(tmp_path: Path, monkeypatch) -> None:
@@ -490,6 +520,84 @@ def test_create_review_preserves_existing_threads(tmp_path: Path, monkeypatch) -
     assert [thread["title"] for thread in threads if thread["source"] == "init"] == [
         prompt.title for prompt in DEFAULT_INIT_THREAD_PROMPTS
     ]
+
+
+def test_create_review_preserves_local_comments_and_replaces_imported_comments(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    session = main.store.get(review_id)
+    session.comments[0].body = "Stale imported body"
+    session.comments.append(
+        DraftComment(
+            id="draft_1",
+            source="draft",
+            body="Local draft body",
+            context=CodeSelection(
+                filePath="src/review/diagram.ts",
+                side="new",
+                startLine=1,
+                endLine=1,
+                selectedText="new",
+            ),
+            status="draft",
+        )
+    )
+    main.store.save(session)
+
+    reload_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert reload_response.status_code == 200
+    comments = main.store.get(review_id).comments
+    assert [comment.id for comment in comments] == ["draft_1", "gh_comment_101"]
+    assert comments[0].body == "Local draft body"
+    assert comments[1].body == "Please rename this helper."
+
+
+def test_create_review_preserves_locally_edited_imported_comment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    client.patch(
+        f"/api/reviews/{review_id}/comments/gh_comment_101",
+        json={"body": "Locally edited imported comment"},
+    )
+
+    reload_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert reload_response.status_code == 200
+    comments = main.store.get(review_id).comments
+    assert len(comments) == 1
+    assert comments[0].body == "Locally edited imported comment"
+    assert comments[0].status == "draft"
+
+
+def test_update_comment_persists_body(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    response = client.patch(
+        f"/api/reviews/{review_id}/comments/gh_comment_101",
+        json={"body": "Updated local comment body"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["body"] == "Updated local comment body"
+    assert response.json()["status"] == "draft"
+    assert main.store.get(review_id).comments[0].body == "Updated local comment body"
 
 
 def test_realtime_session_requires_openai_api_key(monkeypatch) -> None:

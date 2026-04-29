@@ -1,6 +1,13 @@
 import pytest
 
-from review_room.github import ParsedPullRequestUrl, build_review_comment_payload, map_changed_file, map_pull_request, parse_pr_url
+from review_room.github import (
+    ParsedPullRequestUrl,
+    build_review_comment_payload,
+    map_changed_file,
+    map_pull_request,
+    map_pull_request_review_comment,
+    parse_pr_url,
+)
 from review_room.models import CodeSelection, PublishCommentRequest, PullRequestInfo
 
 
@@ -122,3 +129,59 @@ def test_build_review_comment_payload_supports_old_side_single_line_with_selecti
         "line": 12,
         "side": "LEFT",
     }
+
+
+def test_map_pull_request_review_comment_keeps_diff_location_and_github_metadata() -> None:
+    mapped = map_pull_request_review_comment(
+        {
+            "id": 101,
+            "body": "Please rename this helper.",
+            "path": "src/review/diagram.ts",
+            "side": "RIGHT",
+            "line": 42,
+            "start_line": 40,
+            "diff_hunk": "@@ -39,4 +39,6 @@",
+            "commit_id": "def",
+            "html_url": "https://github.com/acme/review-room/pull/247#discussion_r101",
+            "user": {"login": "reviewer"},
+            "created_at": "2026-04-29T04:30:00Z",
+            "updated_at": "2026-04-29T04:31:00Z",
+        }
+    )
+
+    assert mapped.id == "gh_comment_101"
+    assert mapped.source == "github"
+    assert mapped.status == "imported"
+    assert mapped.context.file_path == "src/review/diagram.ts"
+    assert mapped.context.side == "new"
+    assert mapped.context.start_line == 40
+    assert mapped.context.end_line == 42
+    assert mapped.context.commit_sha == "def"
+    assert mapped.author == "reviewer"
+    assert mapped.github_comment_id == 101
+    assert mapped.github_comment_url.endswith("discussion_r101")
+
+
+def test_map_pull_request_review_comment_falls_back_to_original_line_for_outdated_comment() -> None:
+    mapped = map_pull_request_review_comment(
+        {
+            "id": 102,
+            "body": "Outdated but still useful.",
+            "path": "src/review/diagram.ts",
+            "side": "LEFT",
+            "line": None,
+            "original_line": 17,
+            "original_start_line": 15,
+            "diff_hunk": "@@ -15,3 +15,3 @@",
+            "original_commit_id": "abc",
+            "html_url": "https://github.com/acme/review-room/pull/247#discussion_r102",
+            "user": {"login": "reviewer"},
+            "created_at": "2026-04-29T04:30:00Z",
+            "updated_at": "2026-04-29T04:31:00Z",
+        }
+    )
+
+    assert mapped.context.side == "old"
+    assert mapped.context.start_line == 15
+    assert mapped.context.end_line == 17
+    assert mapped.context.commit_sha == "abc"

@@ -66,10 +66,15 @@ class ReviewThread(BaseModel):
 
 class DraftComment(BaseModel):
     id: str
+    source: Literal["github", "draft"] = "draft"
     body: str
     context: CodeSelection
-    status: Literal["draft", "published", "failed"] = "draft"
+    status: Literal["imported", "draft", "queued", "published", "failed"] = "draft"
+    author: str | None = None
+    github_comment_id: int | None = None
     github_comment_url: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ReviewSession(BaseModel):

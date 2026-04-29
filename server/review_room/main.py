@@ -140,7 +140,7 @@ def unquote_dotenv_value(value: str) -> str:
 async def create_review(request: CreateReviewRequest, background_tasks: BackgroundTasks) -> CreateReviewResponse:
     try:
         parsed = parse_pr_url(str(request.pr_url))
-        pr, files = await github.fetch_pull_request(parsed)
+        pr, files, imported_comments = await github.fetch_pull_request(parsed)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GitHubError as exc:
@@ -163,7 +163,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         pr=pr,
         files=files,
         threads=existing_session.threads if existing_session is not None else [],
-        comments=existing_session.comments if existing_session is not None else [],
+        comments=merge_review_comments(existing_session.comments if existing_session is not None else [], imported_comments),
         repo_path=str(repo_path),
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
@@ -186,6 +186,27 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         threads=session.threads,
         comments=session.comments,
     )
+
+
+def merge_review_comments(existing_comments: list[DraftComment], imported_comments: list[DraftComment]) -> list[DraftComment]:
+    imported_by_github_id = {
+        comment.github_comment_id: comment for comment in imported_comments if comment.github_comment_id is not None
+    }
+    existing_by_github_id = {
+        comment.github_comment_id: comment for comment in existing_comments if comment.github_comment_id is not None
+    }
+    merged = [
+        comment
+        for comment in existing_comments
+        if comment.github_comment_id is None or comment.github_comment_id not in imported_by_github_id
+    ]
+    for imported_comment in imported_comments:
+        existing_comment = existing_by_github_id.get(imported_comment.github_comment_id)
+        if existing_comment is not None and existing_comment.status != "imported":
+            merged.append(existing_comment)
+        else:
+            merged.append(imported_comment)
+    return merged
 
 
 @app.get("/api/reviews/{review_id}", response_model=ReviewSession)
@@ -354,6 +375,7 @@ async def update_comment(review_id: str, comment_id: str, request: UpdateComment
     comment.body = request.body.strip()
     comment.status = "draft"
     comment.github_comment_url = None
+    comment.updated_at = datetime.now(timezone.utc)
     store.save(session)
     return comment
 
