@@ -266,6 +266,38 @@ export default function App() {
     [],
   );
 
+  const handleDiagramChanges = useCallback(async () => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      return;
+    }
+    setThreadError(null);
+    try {
+      const response = await createThread({
+        reviewId: context.reviewId,
+        source: "manual",
+        title: "Diagram changes",
+        utterance:
+          "Make a Mermaid diagram of the important changes in this pull request. Inspect the changed files and relevant surrounding code in the repository. Put one fenced mermaid diagram near the top of the answer, then add a short explanation of what the diagram shows. If the PR does not change a clear runtime flow, diagram the changed files and their relationships instead.",
+        context: null,
+      });
+      const session = await getReview(context.reviewId);
+      setReview({
+        reviewId: session.id,
+        pr: session.pr,
+        files: session.files,
+        threads: session.threads,
+        submission: session.submission,
+      });
+      setComments(session.comments);
+      if (response.status === "failed") {
+        setThreadError("Diagram thread failed to start");
+      }
+    } catch (caught) {
+      setThreadError(caught instanceof Error ? caught.message : "Failed to create diagram thread");
+    }
+  }, []);
+
   const handleNavigateReference = useCallback((reference: CodeReference) => {
     setActiveFile(reference.filePath);
     setSelection(null);
@@ -532,6 +564,7 @@ export default function App() {
         onActivateThread={setActiveThreadId}
         onAsk={handleAsk}
         onDeleteComment={handleDeleteComment}
+        onDiagramChanges={handleDiagramChanges}
         onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
         onPublishComments={handlePublishComments}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { CodeReference, CodeSelection, DraftComment, ReviewSubmission, ReviewSubmissionEvent, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
@@ -20,6 +20,7 @@ export function AIWorkbench({
   onActivateThread,
   onAsk,
   onDeleteComment,
+  onDiagramChanges,
   onNavigateReference,
   onFollowUp,
   onPublishComments,
@@ -38,6 +39,7 @@ export function AIWorkbench({
   onActivateThread: (threadId: string) => void;
   onAsk: (utterance: string) => Promise<void>;
   onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
+  onDiagramChanges: () => Promise<void>;
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onPublishComments: (body: string, event: ReviewSubmissionEvent | null) => Promise<void>;
@@ -49,6 +51,7 @@ export function AIWorkbench({
   const [submitting, setSubmitting] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(true);
   const [flashedThreadId, setFlashedThreadId] = useState<string | null>(null);
+  const [diagramSubmitting, setDiagramSubmitting] = useState(false);
   const [publishingComments, setPublishingComments] = useState(false);
   const [submissionBody, setSubmissionBody] = useState(submission.body);
   const [submissionSaving, setSubmissionSaving] = useState(false);
@@ -57,12 +60,34 @@ export function AIWorkbench({
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
   const publishableCommentCount = comments.filter((comment) => comment.status === "draft" || comment.status === "failed").length;
   const hasPublishingComment = comments.some((comment) => comment.status === "publishing");
+  const initThreads = threads.filter((thread) => thread.source === "init");
+  const completedInitThreadCount = initThreads.filter((thread) => thread.status === "complete").length;
   const canSubmitReview =
     !publishingComments &&
     !hasPublishingComment &&
     (publishableCommentCount > 0 || submissionBody.trim().length > 0 || submission.event === "approve") &&
     (submission.event !== "comment" || submissionBody.trim().length > 0) &&
     (submission.event !== "request_changes" || submissionBody.trim().length > 0);
+
+  const focusThread = useCallback((threadId: string) => {
+    onActivateThread(threadId);
+    setOpenThreadIds((current) => {
+      const next = new Set(current);
+      next.add(threadId);
+      return next;
+    });
+    setFlashedThreadId(threadId);
+
+    const requestFrame = window.requestAnimationFrame ?? ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0));
+    const animationFrameId = requestFrame(() => {
+      threadElementRefs.current.get(threadId)?.scrollIntoView?.({
+        block: "center",
+        behavior: "smooth",
+      });
+    });
+    const timeoutId = window.setTimeout(() => setFlashedThreadId((current) => (current === threadId ? null : current)), 500);
+    return { animationFrameId, timeoutId };
+  }, [onActivateThread]);
 
   useEffect(() => {
     setSubmissionBody(submission.body);
@@ -95,27 +120,13 @@ export function AIWorkbench({
       return;
     }
 
-    onActivateThread(threadNavigationRequest.threadId);
-    setOpenThreadIds((current) => {
-      const next = new Set(current);
-      next.add(threadNavigationRequest.threadId);
-      return next;
-    });
-    setFlashedThreadId(threadNavigationRequest.threadId);
-
-    const animationFrameId = window.requestAnimationFrame(() => {
-      threadElementRefs.current.get(threadNavigationRequest.threadId)?.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
-    });
-    const timeoutId = window.setTimeout(() => setFlashedThreadId(null), 500);
+    const { animationFrameId, timeoutId } = focusThread(threadNavigationRequest.threadId);
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
       window.clearTimeout(timeoutId);
     };
-  }, [onActivateThread, threadNavigationRequest, threads]);
+  }, [focusThread, threadNavigationRequest, threads]);
 
   return (
     <aside className="flex h-screen w-[30rem] shrink-0 flex-col bg-[#080a0f]">
@@ -127,6 +138,42 @@ export function AIWorkbench({
         <span className="rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-500">{threads.length} threads</span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        {initThreads.length > 0 ? (
+          <section className="mb-4 rounded-lg border border-slate-800 bg-slate-950 p-3" aria-label="Initial analysis">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-100">Initial analysis</h2>
+                <div className="mt-1 text-xs text-slate-500">
+                  {completedInitThreadCount} of {initThreads.length} complete
+                </div>
+              </div>
+              <span className="rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-500">auto</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {initThreads.map((thread) => (
+                <button
+                  className={
+                    activeThreadId === thread.id
+                      ? "min-h-16 rounded-md border border-violet-400 bg-violet-500/15 p-3 text-left shadow-sm shadow-violet-950/40"
+                      : "min-h-16 rounded-md border border-slate-800 bg-slate-900/70 p-3 text-left hover:border-violet-500/60 hover:bg-slate-900"
+                  }
+                  key={thread.id}
+                  onClick={() => {
+                    focusThread(thread.id);
+                  }}
+                  type="button"
+                >
+                  <div className="truncate text-xs font-semibold text-slate-100">{thread.title}</div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={statusClass(thread.status)}>{thread.status}</span>
+                    {thread.error ? <span className="truncate text-xs text-rose-300">error</span> : null}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <article className="mb-4 overflow-hidden rounded-lg border border-violet-500/40 bg-violet-950/10">
           <button
             aria-expanded={commentsOpen}
@@ -298,6 +345,24 @@ export function AIWorkbench({
           </div>
           {threadError ? <div className="mt-2 text-xs text-rose-300">{threadError}</div> : null}
         </form>
+
+        <button
+          className="mb-4 flex w-full items-center justify-between gap-3 rounded-lg border border-cyan-500/40 bg-cyan-950/20 p-3 text-left hover:border-cyan-300/70 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={diagramSubmitting}
+          onClick={() => {
+            setDiagramSubmitting(true);
+            void onDiagramChanges().finally(() => setDiagramSubmitting(false));
+          }}
+          type="button"
+        >
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-cyan-100">Diagram changes</div>
+            <div className="mt-1 text-xs text-cyan-200/60">Ask Codex for a Mermaid view of this PR</div>
+          </div>
+          <span className="shrink-0 rounded-md border border-cyan-400/40 px-2 py-1 text-xs font-semibold text-cyan-100">
+            {diagramSubmitting ? "Starting" : "Create"}
+          </span>
+        </button>
 
         {threads.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950/70 p-5 text-sm leading-6 text-slate-400">
