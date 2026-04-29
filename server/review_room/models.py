@@ -97,6 +97,14 @@ class FileDiffResponse(BaseModel):
     diff: str
 
 
+class FileContentResponse(BaseModel):
+    file_path: str
+    start_line: int
+    end_line: int
+    total_lines: int
+    content: str
+
+
 class CreateThreadRequest(BaseModel):
     source: Literal["voice", "manual"] = "manual"
     title: str

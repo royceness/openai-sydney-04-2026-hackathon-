@@ -59,6 +59,14 @@ export type FileDiffResponse = {
   diff: string;
 };
 
+export type FileContentResponse = {
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  content: string;
+};
+
 export type CreateThreadResponse = {
   thread_id: string;
   status: "queued" | "running" | "complete" | "failed";

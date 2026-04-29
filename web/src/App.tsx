@@ -319,6 +319,7 @@ export default function App() {
             setSelection(null);
           }}
           pr={review.pr}
+          reviewId={review.reviewId}
           selection={selection}
           threads={review.threads}
         />

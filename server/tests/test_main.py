@@ -43,6 +43,14 @@ class FakeCheckoutService:
         return Path("/tmp/review-room/repos") / parsed.owner / parsed.repo / "worktrees" / f"pr-{parsed.number}"
 
 
+class FakeCheckoutServiceAtPath:
+    def __init__(self, repo_path: Path) -> None:
+        self.repo_path = repo_path
+
+    async def checkout_pull_request(self, parsed: ParsedPullRequestUrl) -> Path:
+        return self.repo_path
+
+
 class FakeAgent:
     async def run_thread(self, repo_path: str, title: str, prompt: str, on_delta=None) -> AgentResult:
         assert repo_path == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
@@ -112,6 +120,64 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
 
     assert diff_response.status_code == 200
     assert diff_response.json() == {"file_path": "src/review/diagram.ts", "diff": "@@ -1 +1 @@\n-old\n+new"}
+
+
+def test_get_file_content_serves_line_range_with_context(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "repo"
+    source_path = repo_path / "src/review/diagram.ts"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "\n".join(
+            [
+                "line 1",
+                "line 2",
+                "line 3",
+                "line 4",
+                "line 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutServiceAtPath(repo_path))
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    content_response = client.get(
+        f"/api/reviews/{review_id}/files/src/review/diagram.ts/content",
+        params={"start_line": 3, "end_line": 4, "context": 1},
+    )
+
+    assert content_response.status_code == 200
+    assert content_response.json() == {
+        "file_path": "src/review/diagram.ts",
+        "start_line": 2,
+        "end_line": 5,
+        "total_lines": 5,
+        "content": "line 2\nline 3\nline 4\nline 5",
+    }
+
+
+def test_get_file_content_rejects_files_outside_changed_file_list(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "repo"
+    unlisted_path = repo_path / "src/review/other.ts"
+    unlisted_path.parent.mkdir(parents=True)
+    unlisted_path.write_text("unlisted\n", encoding="utf-8")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutServiceAtPath(repo_path))
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    content_response = client.get(f"/api/reviews/{review_id}/files/src/review/other.ts/content")
+
+    assert content_response.status_code == 404
+    assert content_response.json() == {"detail": "Changed file not found"}
 
 
 def test_create_thread_runs_agent_and_persists_markdown(tmp_path: Path, monkeypatch) -> None:

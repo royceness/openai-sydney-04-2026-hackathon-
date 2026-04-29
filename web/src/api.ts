@@ -1,4 +1,13 @@
-import type { CodeSelection, CreateFollowUpResponse, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession, ReviewThread } from "./types";
+import type {
+  CodeSelection,
+  CreateFollowUpResponse,
+  CreateReviewResponse,
+  CreateThreadResponse,
+  FileContentResponse,
+  FileDiffResponse,
+  ReviewSession,
+  ReviewThread,
+} from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -33,6 +42,35 @@ export async function getFileDiff(reviewId: string, filePath: string): Promise<F
   const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
   const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/files/${encodedPath}/diff`);
   return readJson<FileDiffResponse>(response);
+}
+
+export async function getFileContent({
+  reviewId,
+  filePath,
+  startLine,
+  endLine,
+  contextLines,
+}: {
+  reviewId: string;
+  filePath: string;
+  startLine?: number;
+  endLine?: number;
+  contextLines?: number;
+}): Promise<FileContentResponse> {
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  const params = new URLSearchParams();
+  if (startLine !== undefined) {
+    params.set("start_line", String(startLine));
+  }
+  if (endLine !== undefined) {
+    params.set("end_line", String(endLine));
+  }
+  if (contextLines !== undefined) {
+    params.set("context", String(contextLines));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/files/${encodedPath}/content${query}`);
+  return readJson<FileContentResponse>(response);
 }
 
 export async function createThread({
