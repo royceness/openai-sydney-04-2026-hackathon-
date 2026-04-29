@@ -437,6 +437,9 @@ describe("VoiceSelectionDemo", () => {
     expect(options.instructions).toContain("one or two short sentences");
     expect(options.instructions).toContain("concise and precise");
     expect(options.instructions).toContain("For UI commands, call the matching tool and do not add a spoken confirmation");
+    expect(options.instructions).toContain("Call search_review_threads only when the user explicitly asks to search existing threads or previous answers");
+    expect(options.instructions).toContain("For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases");
+    expect(options.instructions).toContain("call ask_general_question so Codex can inspect the repository");
     expect(options.instructions).toContain("answer immediately out loud");
   });
 
