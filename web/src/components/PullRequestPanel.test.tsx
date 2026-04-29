@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PullRequestPanel } from "./PullRequestPanel";
 
 describe("PullRequestPanel", () => {
@@ -19,6 +19,7 @@ describe("PullRequestPanel", () => {
           base_sha: "abc",
           head_sha: "def",
         }}
+        onDraftComment={vi.fn()}
         selection={null}
       />,
     );

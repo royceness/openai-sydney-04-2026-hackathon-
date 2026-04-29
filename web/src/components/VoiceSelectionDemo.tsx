@@ -8,7 +8,15 @@ import {
 import { z } from "zod";
 import type { CodeSelection } from "../types";
 
-export function VoiceSelectionDemo({ selection }: { selection: CodeSelection | null }) {
+type DraftCommentResult = { status: "created" | "selection-required" | "empty" };
+
+export function VoiceSelectionDemo({
+  selection,
+  onDraftComment,
+}: {
+  selection: CodeSelection | null;
+  onDraftComment: (body: string) => DraftCommentResult;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [popupText, setPopupText] = useState<string | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -37,8 +45,29 @@ export function VoiceSelectionDemo({ selection }: { selection: CodeSelection | n
           return { ok: true, selectedLocation: text };
         },
       }),
+      defineVoiceTool({
+        name: "draft_pr_comment",
+        description: "Create a local draft PR review comment attached to the currently selected diff lines.",
+        parameters: z.object({
+          comment: z.string().describe("The exact PR review comment body to draft."),
+        }),
+        execute: ({ comment }) => {
+          const result = onDraftComment(comment);
+          if (result.status === "created") {
+            const text = selectedLocationMessage(selectionRef.current);
+            setPopupText(`Draft comment queued for ${text}.`);
+            return { ok: true, status: "created", selectedLocation: text };
+          }
+          if (result.status === "selection-required") {
+            setPopupText("Select lines in the diff to attach this PR comment.");
+            return { ok: true, status: "selection-required" };
+          }
+          setPopupText("No comment text was provided.");
+          return { ok: false, status: "empty" };
+        },
+      }),
     ],
-    [],
+    [onDraftComment],
   );
 
   const [controller] = useState<VoiceControlController>(() =>
@@ -46,23 +75,23 @@ export function VoiceSelectionDemo({ selection }: { selection: CodeSelection | n
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. For any unclear, noisy, partial, unrelated, ambiguous audio, or case where no UI action is required, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here. Extract the requested comment text into the comment parameter. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. For any unclear, noisy, partial, unrelated, ambiguous audio, or case where no UI action is required, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onError: (voiceError) => {
         console.error("[voice] error", voiceError);
         setError(voiceError.message);
       },
       onToolError: (call) => {
-        if (call.name === "show_selected_text") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
           console.error("[voice] tool error", call);
         }
       },
       onToolStart: (call) => {
-        if (call.name === "show_selected_text") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
           console.info("[voice] tool start", call);
         }
       },
       onToolSuccess: (call) => {
-        if (call.name === "show_selected_text") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
           console.info("[voice] tool success", call);
         }
       },

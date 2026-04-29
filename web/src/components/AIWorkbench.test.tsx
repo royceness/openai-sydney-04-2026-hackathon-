@@ -23,7 +23,7 @@ describe("AIWorkbench", () => {
 
   it("submits a manual question", async () => {
     const onAsk = vi.fn().mockResolvedValue(undefined);
-    render(<AIWorkbench onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
+    render(<AIWorkbench comments={[]} pendingCommentBody={null} onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
 
     await userEvent.type(screen.getByPlaceholderText("Ask about selected code..."), "Explain this function");
     await userEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -34,6 +34,8 @@ describe("AIWorkbench", () => {
   it("renders completed markdown thread output", () => {
     render(
       <AIWorkbench
+        comments={[]}
+        pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
         threadError={null}
@@ -57,9 +59,44 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
   });
 
+  it("renders local PR comment drafts and pending comment prompt", () => {
+    render(
+      <AIWorkbench
+        comments={[
+          {
+            id: "draft_1",
+            body: "this needs tests",
+            status: "draft",
+            created_at: "2026-04-29T00:00:00Z",
+            context: {
+              filePath: "src/review/diagram.ts",
+              side: "new",
+              startLine: 201,
+              endLine: 203,
+              selectedText: "function buildDiagram() {}",
+            },
+          },
+        ]}
+        pendingCommentBody="add null input coverage"
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /PR Comments/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Select lines to attach this comment")).toBeInTheDocument();
+    expect(screen.getByText("add null input coverage")).toBeInTheDocument();
+    expect(screen.getByText("src/review/diagram.ts:L201-L203")).toBeInTheDocument();
+    expect(screen.getByText("this needs tests")).toBeInTheDocument();
+  });
+
   it("collapses and reopens thread output", async () => {
     render(
       <AIWorkbench
+        comments={[]}
+        pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
         threadError={null}
@@ -96,6 +133,8 @@ describe("AIWorkbench", () => {
   it("keeps a collapsed thread closed when thread content streams in", async () => {
     const { rerender } = render(
       <AIWorkbench
+        comments={[]}
+        pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
         threadError={null}
@@ -118,6 +157,8 @@ describe("AIWorkbench", () => {
 
     rerender(
       <AIWorkbench
+        comments={[]}
+        pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
         threadError={null}

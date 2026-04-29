@@ -4,7 +4,7 @@ import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
 import { PullRequestPanel } from "./components/PullRequestPanel";
-import type { ChangedFile, CodeSelection, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
+import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
 
@@ -24,12 +24,16 @@ export default function App() {
   const [diffError, setDiffError] = useState<string | null>(null);
   const [selection, setSelection] = useState<CodeSelection | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [comments, setComments] = useState<DraftComment[]>([]);
+  const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
 
   const loadReview = useCallback(async (prUrl: string) => {
     setLoadState("loading");
     setError(null);
     setSelection(null);
+    setComments([]);
+    setPendingCommentBody(null);
     try {
       const created = await createReview(prUrl);
       const nextReview = {
@@ -114,6 +118,27 @@ export default function App() {
     };
   }, [activeFile, review, selection]);
 
+  const addDraftComment = useCallback((body: string, context: CodeSelection) => {
+    setComments((current) => [
+      {
+        id: `draft_${Date.now().toString(36)}_${current.length + 1}`,
+        body,
+        context,
+        status: "draft",
+        created_at: new Date().toISOString(),
+      },
+      ...current,
+    ]);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingCommentBody || !selection) {
+      return;
+    }
+    addDraftComment(pendingCommentBody, selection);
+    setPendingCommentBody(null);
+  }, [addDraftComment, pendingCommentBody, selection]);
+
   useEffect(() => {
     if (!review || !review.threads.some((thread) => thread.status === "queued" || thread.status === "running")) {
       return;
@@ -166,6 +191,23 @@ export default function App() {
     [],
   );
 
+  const handleDraftComment = useCallback(
+    (body: string) => {
+      const trimmed = body.trim();
+      if (!trimmed) {
+        return { status: "empty" as const };
+      }
+      const context = reviewContextRef.current;
+      if (!context?.selection) {
+        setPendingCommentBody(trimmed);
+        return { status: "selection-required" as const };
+      }
+      addDraftComment(trimmed, context.selection);
+      return { status: "created" as const };
+    },
+    [addDraftComment],
+  );
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -189,7 +231,7 @@ export default function App() {
         }}
       />
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
-        <PullRequestPanel pr={review.pr} selection={selection} />
+        <PullRequestPanel pr={review.pr} selection={selection} onDraftComment={handleDraftComment} />
         <DiffPane
           filePath={activeFile}
           diff={activeDiff}
@@ -198,7 +240,14 @@ export default function App() {
           onSelectionChange={setSelection}
         />
       </main>
-      <AIWorkbench threads={review.threads} selection={selection} threadError={threadError} onAsk={handleAsk} />
+      <AIWorkbench
+        comments={comments}
+        pendingCommentBody={pendingCommentBody}
+        threads={review.threads}
+        selection={selection}
+        threadError={threadError}
+        onAsk={handleAsk}
+      />
     </div>
   );
 }
