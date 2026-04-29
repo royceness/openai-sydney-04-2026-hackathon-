@@ -1,29 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { CodeReference, CodeSelection, ReviewThread } from "../types";
+import type { CodeReference, CodeSelection, DraftComment, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
 export function AIWorkbench({
   activeThreadId,
+  comments,
+  pendingCommentBody,
   threads,
   selection,
   threadError,
   onActivateThread,
   onAsk,
+  onDeleteComment,
   onNavigateReference,
   onFollowUp,
 }: {
   activeThreadId: string | null;
+  comments: DraftComment[];
+  pendingCommentBody: string | null;
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
   onActivateThread: (threadId: string) => void;
   onAsk: (utterance: string) => Promise<void>;
+  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(true);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
 
@@ -55,6 +62,67 @@ export function AIWorkbench({
         <span className="rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-500">{threads.length} threads</span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        <article className="mb-4 overflow-hidden rounded-lg border border-violet-500/40 bg-violet-950/10">
+          <button
+            aria-expanded={commentsOpen}
+            className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-violet-950/20"
+            onClick={() => setCommentsOpen((open) => !open)}
+            type="button"
+          >
+            <div className="min-w-0">
+              <h2 className="truncate font-semibold text-slate-100">PR Comments</h2>
+              <div className="mt-1 text-xs text-slate-500">
+                {pendingCommentBody ? "Waiting for selected lines" : `${comments.length} local draft${comments.length === 1 ? "" : "s"}`}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {pendingCommentBody ? <span className="rounded px-2 py-1 text-xs bg-amber-500/10 text-amber-300">needs selection</span> : null}
+              <span className="rounded px-2 py-1 text-xs bg-violet-500/10 text-violet-200">{comments.length}</span>
+              <span aria-hidden="true" className="w-3 text-center text-sm text-slate-500">
+                {commentsOpen ? "-" : "+"}
+              </span>
+            </div>
+          </button>
+
+          {commentsOpen ? (
+            <div className="space-y-3 px-4 pb-4">
+              {pendingCommentBody ? (
+                <div className="rounded-md border border-amber-700/50 bg-amber-950/20 p-3 text-sm text-amber-100">
+                  <div className="font-semibold">Select lines to attach this comment</div>
+                  <div className="mt-2 whitespace-pre-wrap text-slate-200">{pendingCommentBody}</div>
+                </div>
+              ) : null}
+              {comments.length === 0 && !pendingCommentBody ? (
+                <div className="rounded-md border border-dashed border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-500">
+                  Drafted PR comments will appear here before anything is published.
+                </div>
+              ) : null}
+              {comments.map((comment) => (
+                <div className="rounded-md border border-slate-800 bg-slate-950 p-3" key={comment.id}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 truncate text-xs font-semibold text-violet-200">{formatCommentLocation(comment.context)}</div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{comment.status}</span>
+                      <button
+                        aria-label={`Delete draft comment at ${formatCommentLocation(comment.context)}`}
+                        className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
+                        onClick={() => onDeleteComment(comment.id)}
+                        title="Delete draft comment"
+                        type="button"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200" data-comment-id={comment.id}>
+                    {comment.body}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </article>
+
         <form
           className="mb-4 rounded-lg border border-slate-800 bg-slate-950 p-3"
           onSubmit={(event) => {
@@ -279,4 +347,25 @@ function statusClass(status: ReviewThread["status"]) {
     return `${base} bg-violet-500/10 text-violet-300`;
   }
   return `${base} bg-amber-500/10 text-amber-300`;
+}
+
+function formatCommentLocation(selection: CodeSelection) {
+  const start = selection.startLine;
+  const end = selection.endLine;
+  if (start === null || end === null) {
+    return selection.filePath;
+  }
+  return start === end ? `${selection.filePath}:L${start}` : `${selection.filePath}:L${start}-L${end}`;
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 15h10l1-15" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
 }

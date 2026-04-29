@@ -4,7 +4,7 @@ import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
 import { PullRequestPanel } from "./components/PullRequestPanel";
-import type { ChangedFile, CodeReference, CodeSelection, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
+import type { ChangedFile, CodeReference, CodeSelection, DraftComment, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
 
@@ -26,7 +26,10 @@ export default function App() {
   const [threadError, setThreadError] = useState<string | null>(null);
   const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [comments, setComments] = useState<DraftComment[]>([]);
+  const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
+  const commentsRef = useRef<DraftComment[]>([]);
 
   const loadReview = useCallback(async (prUrl: string) => {
     setLoadState("loading");
@@ -34,6 +37,8 @@ export default function App() {
     setSelection(null);
     setTargetReference(null);
     setActiveThreadId(null);
+    setComments([]);
+    setPendingCommentBody(null);
     try {
       const created = await createReview(prUrl);
       const nextReview = {
@@ -117,6 +122,31 @@ export default function App() {
       selection: selection ?? undefined,
     };
   }, [activeFile, review, selection]);
+
+  const addDraftComment = useCallback((body: string, context: CodeSelection) => {
+    setComments((current) => [
+      {
+        id: `draft_${Date.now().toString(36)}_${current.length + 1}`,
+        body,
+        context,
+        status: "draft",
+        created_at: new Date().toISOString(),
+      },
+      ...current,
+    ]);
+  }, []);
+
+  useEffect(() => {
+    commentsRef.current = comments;
+  }, [comments]);
+
+  useEffect(() => {
+    if (!pendingCommentBody || !selection) {
+      return;
+    }
+    addDraftComment(pendingCommentBody, selection);
+    setPendingCommentBody(null);
+  }, [addDraftComment, pendingCommentBody, selection]);
 
   useEffect(() => {
     if (!review || !review.threads.some((thread) => thread.status === "queued" || thread.status === "running")) {
@@ -205,6 +235,53 @@ export default function App() {
     }
   }, []);
 
+  const handleDraftComment = useCallback(
+    (body: string) => {
+      const trimmed = body.trim();
+      if (!trimmed) {
+        return { status: "empty" as const };
+      }
+      const context = reviewContextRef.current;
+      if (context?.selection) {
+        addDraftComment(trimmed, context.selection);
+        return { status: "created" as const };
+      }
+      if (context?.activeFile) {
+        addDraftComment(trimmed, {
+          filePath: context.activeFile,
+          side: "new",
+          startLine: 1,
+          endLine: 1,
+          selectedText: "",
+        });
+        return { status: "created" as const };
+      }
+      setPendingCommentBody(trimmed);
+      return { status: "selection-required" as const };
+    },
+    [addDraftComment],
+  );
+
+  const handleEditComment = useCallback((commentId: string, body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed) {
+      return { status: "empty" as const };
+    }
+    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+      return { status: "not-found" as const };
+    }
+    setComments((current) => current.map((comment) => (comment.id === commentId ? { ...comment, body: trimmed } : comment)));
+    return { status: "updated" as const };
+  }, []);
+
+  const handleDeleteComment = useCallback((commentId: string) => {
+    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+      return { status: "not-found" as const };
+    }
+    setComments((current) => current.filter((comment) => comment.id !== commentId));
+    return { status: "deleted" as const };
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -233,6 +310,9 @@ export default function App() {
           activeThreadId={activeThreadId}
           files={review.files}
           onAsk={(utterance) => handleAsk(utterance, "voice")}
+          onDeleteComment={handleDeleteComment}
+          onDraftComment={handleDraftComment}
+          onEditComment={handleEditComment}
           onFollowUp={(threadId, utterance) => handleFollowUp(threadId, utterance, "voice")}
           onNavigateFile={(filePath) => {
             setActiveFile(filePath);
@@ -253,11 +333,14 @@ export default function App() {
       </main>
       <AIWorkbench
         activeThreadId={activeThreadId}
+        comments={comments}
+        pendingCommentBody={pendingCommentBody}
         threads={review.threads}
         selection={selection}
         threadError={threadError}
         onActivateThread={setActiveThreadId}
         onAsk={handleAsk}
+        onDeleteComment={handleDeleteComment}
         onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
       />

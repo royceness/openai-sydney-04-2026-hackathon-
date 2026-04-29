@@ -6,6 +6,9 @@ export function PullRequestPanel({
   activeThreadId,
   files,
   onAsk,
+  onDeleteComment,
+  onDraftComment,
+  onEditComment,
   onFollowUp,
   onNavigateFile,
   pr,
@@ -16,6 +19,9 @@ export function PullRequestPanel({
   activeThreadId: string | null;
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
+  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
+  onDraftComment: (body: string) => { status: "created" | "selection-required" | "empty" };
+  onEditComment: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   pr: PullRequestInfo;
@@ -45,6 +51,9 @@ export function PullRequestPanel({
           activeThreadId={activeThreadId}
           files={files}
           onAsk={onAsk}
+          onDeleteComment={onDeleteComment}
+          onDraftComment={onDraftComment}
+          onEditComment={onEditComment}
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
           selection={selection}

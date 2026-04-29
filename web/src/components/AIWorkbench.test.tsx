@@ -16,10 +16,13 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
   return render(
     <AIWorkbench
       activeThreadId={null}
+      comments={[]}
       onActivateThread={vi.fn()}
       onAsk={vi.fn()}
+      onDeleteComment={vi.fn()}
       onFollowUp={vi.fn()}
       onNavigateReference={vi.fn()}
+      pendingCommentBody={null}
       selection={null}
       threadError={null}
       threads={[]}
@@ -66,6 +69,39 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
+  });
+
+  it("renders and deletes local PR comment drafts", async () => {
+    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    renderWorkbench({
+      comments: [
+        {
+          id: "draft_1",
+          body: "this needs tests",
+          status: "draft",
+          created_at: "2026-04-29T00:00:00Z",
+          context: {
+            filePath: "README",
+            side: "new",
+            startLine: 1,
+            endLine: 1,
+            selectedText: "",
+          },
+        },
+      ],
+      onDeleteComment,
+      pendingCommentBody: "add null input coverage",
+    });
+
+    expect(screen.getByRole("button", { name: /PR Comments/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Select lines to attach this comment")).toBeInTheDocument();
+    expect(screen.getByText("add null input coverage")).toBeInTheDocument();
+    expect(screen.getByText("README:L1")).toBeInTheDocument();
+    expect(screen.getByText("this needs tests")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete draft comment at README:L1" }));
+
+    expect(onDeleteComment).toHaveBeenCalledWith("draft_1");
   });
 
   it("collapses and reopens thread output", async () => {
@@ -122,10 +158,13 @@ describe("AIWorkbench", () => {
     rerender(
       <AIWorkbench
         activeThreadId={null}
+        comments={[]}
         onActivateThread={vi.fn()}
         onAsk={vi.fn()}
+        onDeleteComment={vi.fn()}
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
+        pendingCommentBody={null}
         selection={null}
         threadError={null}
         threads={[
@@ -205,10 +244,13 @@ describe("AIWorkbench", () => {
     rerender(
       <AIWorkbench
         activeThreadId="thr_1"
+        comments={[]}
         onActivateThread={onActivateThread}
         onAsk={vi.fn()}
+        onDeleteComment={vi.fn()}
         onFollowUp={onFollowUp}
         onNavigateReference={vi.fn()}
+        pendingCommentBody={null}
         selection={null}
         threadError={null}
         threads={[thread]}

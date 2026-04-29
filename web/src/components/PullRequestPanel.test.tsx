@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PullRequestPanel } from "./PullRequestPanel";
 
 describe("PullRequestPanel", () => {
@@ -23,6 +23,9 @@ describe("PullRequestPanel", () => {
         activeThreadId={null}
         files={[]}
         onAsk={async () => undefined}
+        onDeleteComment={vi.fn()}
+        onDraftComment={vi.fn()}
+        onEditComment={vi.fn()}
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
         selection={null}

@@ -85,6 +85,9 @@ function renderVoiceSelectionDemo({
   activeThreadId = "thr_issue",
   files = changedFiles,
   onAsk = vi.fn(() => Promise.resolve()),
+  onDeleteComment = vi.fn(() => ({ status: "deleted" as const })),
+  onDraftComment = vi.fn(() => ({ status: "created" as const })),
+  onEditComment = vi.fn(() => ({ status: "updated" as const })),
   onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
   selection = selectedCode,
@@ -94,6 +97,9 @@ function renderVoiceSelectionDemo({
   activeThreadId?: string | null;
   files?: ChangedFile[];
   onAsk?: (utterance: string) => Promise<void>;
+  onDeleteComment?: (commentId: string) => { status: "deleted" | "not-found" };
+  onDraftComment?: (body: string) => { status: "created" | "selection-required" | "empty" };
+  onEditComment?: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
   onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
   selection?: CodeSelection | null;
@@ -105,6 +111,9 @@ function renderVoiceSelectionDemo({
       activeThreadId={activeThreadId}
       files={files}
       onAsk={onAsk}
+      onDeleteComment={onDeleteComment}
+      onDraftComment={onDraftComment}
+      onEditComment={onEditComment}
       onFollowUp={onFollowUp}
       onNavigateFile={onNavigateFile}
       selection={selection}
@@ -193,6 +202,15 @@ describe("VoiceSelectionDemo", () => {
           }),
           expect.objectContaining({
             name: "ask_thread_follow_up",
+          }),
+          expect.objectContaining({
+            name: "draft_pr_comment",
+          }),
+          expect.objectContaining({
+            name: "edit_selected_pr_comment",
+          }),
+          expect.objectContaining({
+            name: "delete_selected_pr_comment",
           }),
           expect.objectContaining({
             name: "get_review_room_context",

@@ -14,6 +14,10 @@ type VoicePopup = {
   body: string;
 };
 
+type DraftCommentResult = { status: "created" | "selection-required" | "empty" };
+type EditCommentResult = { status: "updated" | "not-found" | "empty" };
+type DeleteCommentResult = { status: "deleted" | "not-found" };
+
 type FileNavigationRequest =
   | {
       action: "next" | "previous";
@@ -29,6 +33,9 @@ export function VoiceSelectionDemo({
   activeThreadId,
   files,
   onAsk,
+  onDeleteComment,
+  onDraftComment,
+  onEditComment,
   onFollowUp,
   onNavigateFile,
   selection,
@@ -38,6 +45,9 @@ export function VoiceSelectionDemo({
   activeThreadId: string | null;
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
+  onDeleteComment: (commentId: string) => DeleteCommentResult;
+  onDraftComment: (body: string) => DraftCommentResult;
+  onEditComment: (commentId: string, body: string) => EditCommentResult;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   selection: CodeSelection | null;
@@ -51,6 +61,9 @@ export function VoiceSelectionDemo({
   const activeThreadIdRef = useRef<string | null>(activeThreadId);
   const filesRef = useRef<ChangedFile[]>(files);
   const onAskRef = useRef(onAsk);
+  const onDeleteCommentRef = useRef(onDeleteComment);
+  const onDraftCommentRef = useRef(onDraftComment);
+  const onEditCommentRef = useRef(onEditComment);
   const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
   const selectionRef = useRef<CodeSelection | null>(selection);
@@ -72,6 +85,18 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     onAskRef.current = onAsk;
   }, [onAsk]);
+
+  useEffect(() => {
+    onDeleteCommentRef.current = onDeleteComment;
+  }, [onDeleteComment]);
+
+  useEffect(() => {
+    onDraftCommentRef.current = onDraftComment;
+  }, [onDraftComment]);
+
+  useEffect(() => {
+    onEditCommentRef.current = onEditComment;
+  }, [onEditComment]);
 
   useEffect(() => {
     onFollowUpRef.current = onFollowUp;
@@ -155,6 +180,71 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
+        name: "draft_pr_comment",
+        description: "Create a local draft PR review comment attached to the selected diff lines, or to the active file when no lines are selected.",
+        parameters: z.object({
+          comment: z.string().describe("The exact PR review comment body to draft."),
+        }),
+        execute: ({ comment }) => {
+          const result = onDraftCommentRef.current(comment);
+          if (result.status === "created") {
+            const text = selectedLocationMessage(selectionRef.current);
+            setPopup({ title: "PR comment drafted", body: text });
+            return { ok: true, status: "created", selectedLocation: text };
+          }
+          if (result.status === "selection-required") {
+            setPopup({ title: "Select lines", body: "Select lines in the diff to attach this PR comment." });
+            return { ok: true, status: "selection-required" };
+          }
+          setPopup({ title: "PR comment", body: "No comment text was provided." });
+          return { ok: false, status: "empty" };
+        },
+      }),
+      defineVoiceTool({
+        name: "edit_selected_pr_comment",
+        description: "Edit the local draft PR comment whose text is currently selected in the PR comments queue.",
+        parameters: z.object({
+          comment: z.string().describe("The replacement PR review comment body."),
+        }),
+        execute: ({ comment }) => {
+          const commentId = selectedDraftCommentId();
+          if (!commentId) {
+            setPopup({ title: "Select comment text", body: "Select text inside a draft PR comment first." });
+            return { ok: true, status: "comment-selection-required" };
+          }
+          const result = onEditCommentRef.current(commentId, comment);
+          if (result.status === "updated") {
+            setPopup({ title: "PR comment updated", body: "Draft comment updated." });
+            return { ok: true, status: "updated" };
+          }
+          if (result.status === "empty") {
+            setPopup({ title: "PR comment", body: "No replacement comment text was provided." });
+            return { ok: false, status: "empty" };
+          }
+          setPopup({ title: "PR comment", body: "Selected draft comment was not found." });
+          return { ok: false, status: "not-found" };
+        },
+      }),
+      defineVoiceTool({
+        name: "delete_selected_pr_comment",
+        description: "Delete the local draft PR comment whose text is currently selected in the PR comments queue.",
+        parameters: z.object({}),
+        execute: () => {
+          const commentId = selectedDraftCommentId();
+          if (!commentId) {
+            setPopup({ title: "Select comment text", body: "Select text inside a draft PR comment first." });
+            return { ok: true, status: "comment-selection-required" };
+          }
+          const result = onDeleteCommentRef.current(commentId);
+          if (result.status === "deleted") {
+            setPopup({ title: "PR comment deleted", body: "Draft comment deleted." });
+            return { ok: true, status: "deleted" };
+          }
+          setPopup({ title: "PR comment", body: "Selected draft comment was not found." });
+          return { ok: false, status: "not-found" };
+        },
+      }),
+      defineVoiceTool({
         name: "navigate_file",
         description: "Navigate the pull request diff to another changed file. Use action next for commands like 'show me the next file', previous for 'previous file', and file for commands like 'go to foo.txt'.",
         parameters: z.object({
@@ -181,7 +271,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onEvent: (event) => {
         logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
       },
@@ -324,6 +414,19 @@ export function selectedLocationMessage(selection: CodeSelection | null) {
   }
   const lineLabel = startLine === endLine ? `Line ${startLine}` : `Lines ${startLine}-${endLine}`;
   return `${lineLabel} of ${selection.filePath}`;
+}
+
+function selectedDraftCommentId() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) {
+    return null;
+  }
+  return closestCommentId(selection.anchorNode) ?? closestCommentId(selection.focusNode);
+}
+
+function closestCommentId(node: Node | null) {
+  const element = node instanceof Element ? node : node?.parentElement;
+  return element?.closest<HTMLElement>("[data-comment-id]")?.dataset.commentId ?? null;
 }
 
 export type FileNavigationResult =
