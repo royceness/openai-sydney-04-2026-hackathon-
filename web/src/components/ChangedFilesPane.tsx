@@ -13,7 +13,7 @@ export function ChangedFilesPane({
   const totalDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
 
   return (
-    <aside className="flex h-screen w-[21rem] shrink-0 flex-col border-r border-slate-800/80 bg-[#07090d]">
+    <aside className="flex h-screen w-[19rem] shrink-0 flex-col border-r border-slate-800/80 bg-[#07090d]">
       <div className="flex h-16 items-center gap-3 border-b border-slate-800/80 px-4">
         <div className="flex h-9 w-9 items-center justify-center rounded-md bg-violet-500 font-bold">RR</div>
         <div>
@@ -68,4 +68,3 @@ function statusClass(status: ChangedFile["status"]) {
   }
   return `${base} border-slate-600 bg-slate-900 text-slate-300`;
 }
-

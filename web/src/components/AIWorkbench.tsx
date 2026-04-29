@@ -17,7 +17,7 @@ export function AIWorkbench({
   const [submitting, setSubmitting] = useState(false);
 
   return (
-    <aside className="flex h-screen w-[34rem] shrink-0 flex-col bg-[#080a0f]">
+    <aside className="flex h-screen w-[30rem] shrink-0 flex-col bg-[#080a0f]">
       <div className="flex h-16 items-center justify-between border-b border-slate-800 px-5">
         <div>
           <div className="text-sm font-semibold text-slate-100">AI Workbench</div>

@@ -179,7 +179,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen min-h-0 bg-[#080a0f] text-slate-100">
+    <div className="flex h-screen min-w-[1320px] bg-[#080a0f] text-slate-100">
       <ChangedFilesPane
         files={review.files}
         activeFile={activeFile}
@@ -188,7 +188,7 @@ export default function App() {
           setSelection(null);
         }}
       />
-      <main className="flex min-w-0 flex-1 flex-col border-x border-slate-800/80">
+      <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
         <PullRequestPanel pr={review.pr} />
         <DiffPane
           filePath={activeFile}
