@@ -19,6 +19,10 @@ describe("PullRequestPanel", () => {
           base_sha: "abc",
           head_sha: "def",
         }}
+        activeFile={null}
+        files={[]}
+        onAsk={async () => undefined}
+        onNavigateFile={() => undefined}
         selection={null}
       />,
     );

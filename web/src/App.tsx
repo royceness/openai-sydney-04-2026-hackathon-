@@ -136,7 +136,7 @@ export default function App() {
   }, [review]);
 
   const handleAsk = useCallback(
-    async (utterance: string) => {
+    async (utterance: string, source: ReviewThread["source"] = "manual") => {
       const context = reviewContextRef.current;
       if (!context) {
         return;
@@ -145,6 +145,7 @@ export default function App() {
       try {
         const response = await createThread({
           reviewId: context.reviewId,
+          source,
           title: utterance,
           utterance,
           context: context.selection ?? null,
@@ -189,7 +190,17 @@ export default function App() {
         }}
       />
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
-        <PullRequestPanel pr={review.pr} selection={selection} />
+        <PullRequestPanel
+          activeFile={activeFile}
+          files={review.files}
+          onAsk={(utterance) => handleAsk(utterance, "voice")}
+          onNavigateFile={(filePath) => {
+            setActiveFile(filePath);
+            setSelection(null);
+          }}
+          pr={review.pr}
+          selection={selection}
+        />
         <DiffPane
           filePath={activeFile}
           diff={activeDiff}

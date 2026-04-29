@@ -1,4 +1,4 @@
-import type { CodeSelection, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession } from "./types";
+import type { CodeSelection, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession, ReviewThread } from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -37,11 +37,13 @@ export async function getFileDiff(reviewId: string, filePath: string): Promise<F
 
 export async function createThread({
   reviewId,
+  source = "manual",
   title,
   utterance,
   context,
 }: {
   reviewId: string;
+  source?: ReviewThread["source"];
   title: string;
   utterance: string;
   context: CodeSelection | null;
@@ -50,7 +52,7 @@ export async function createThread({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      source: "manual",
+      source,
       title,
       utterance,
       context,

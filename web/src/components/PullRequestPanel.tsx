@@ -1,7 +1,21 @@
-import type { CodeSelection, PullRequestInfo } from "../types";
+import type { ChangedFile, CodeSelection, PullRequestInfo } from "../types";
 import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 
-export function PullRequestPanel({ pr, selection }: { pr: PullRequestInfo; selection: CodeSelection | null }) {
+export function PullRequestPanel({
+  activeFile,
+  files,
+  onAsk,
+  onNavigateFile,
+  pr,
+  selection,
+}: {
+  activeFile: string | null;
+  files: ChangedFile[];
+  onAsk: (utterance: string) => Promise<void>;
+  onNavigateFile: (filePath: string) => void;
+  pr: PullRequestInfo;
+  selection: CodeSelection | null;
+}) {
   return (
     <section className="border-b border-slate-800 bg-[#0b0e14] p-5">
       <div className="flex items-start justify-between gap-4">
@@ -20,7 +34,13 @@ export function PullRequestPanel({ pr, selection }: { pr: PullRequestInfo; selec
           </div>
           <h1 className="mt-3 text-xl font-semibold text-white">{pr.title}</h1>
         </div>
-        <VoiceSelectionDemo selection={selection} />
+        <VoiceSelectionDemo
+          activeFile={activeFile}
+          files={files}
+          onAsk={onAsk}
+          onNavigateFile={onNavigateFile}
+          selection={selection}
+        />
       </div>
       {pr.body ? (
         <div className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-slate-300">{pr.body}</div>
