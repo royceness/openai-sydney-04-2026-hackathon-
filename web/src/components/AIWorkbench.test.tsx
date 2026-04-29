@@ -52,4 +52,40 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
   });
+
+  it("collapses and reopens thread output", async () => {
+    render(
+      <AIWorkbench
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[
+          {
+            id: "thr_1",
+            source: "manual",
+            title: "Explain this function",
+            status: "complete",
+            markdown: "This is the thread body.",
+            created_at: "2026-04-29T00:00:00Z",
+            updated_at: "2026-04-29T00:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: /Explain this function/ });
+
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("This is the thread body.")).toBeInTheDocument();
+
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("This is the thread body.")).not.toBeInTheDocument();
+
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("This is the thread body.")).toBeVisible();
+  });
 });

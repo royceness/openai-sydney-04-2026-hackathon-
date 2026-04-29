@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { CodeSelection, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
@@ -16,6 +16,19 @@ export function AIWorkbench({
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
+
+  useEffect(() => {
+    setOpenThreadIds((current) => {
+      const next = new Set(current);
+      for (const thread of threads) {
+        if (!current.has(thread.id)) {
+          next.add(thread.id);
+        }
+      }
+      return next;
+    });
+  }, [threads]);
 
   return (
     <aside className="flex h-screen w-[30rem] shrink-0 flex-col bg-[#080a0f]">
@@ -67,43 +80,74 @@ export function AIWorkbench({
             Select code in the diff, then ask a question. Each question creates a persistent Codex-backed workbench thread.
           </div>
         ) : (
-          threads.map((thread) => (
-            <article className="mb-3 rounded-lg border border-slate-800 bg-slate-950 p-4" key={thread.id}>
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-slate-100">{thread.title}</h3>
-                <span className={statusClass(thread.status)}>{thread.status}</span>
-              </div>
-              {thread.context ? (
-                <div className="mt-1 text-xs text-slate-500">
-                  {thread.context.filePath}
-                  {thread.context.startLine ? `:L${thread.context.startLine}` : ""}
-                  {thread.context.endLine && thread.context.endLine !== thread.context.startLine ? `-L${thread.context.endLine}` : ""}
-                </div>
-              ) : null}
-              {(thread.status === "queued" || thread.status === "running") && !thread.markdown ? (
-                <p className="mt-3 text-sm text-slate-400">Codex is working...</p>
-              ) : null}
-              {thread.error ? <p className="mt-3 text-sm text-rose-300">{thread.error}</p> : null}
-              {thread.markdown ? (
-                <div className="markdown-body mt-3 text-sm leading-6 text-slate-300">
-                  <ReactMarkdown
-                    components={{
-                      code({ children, className }) {
-                        const language = /language-(\w+)/.exec(className ?? "")?.[1];
-                        const source = String(children).replace(/\n$/, "");
-                        if (language === "mermaid") {
-                          return <MermaidBlock source={source} />;
-                        }
-                        return <code className={className}>{children}</code>;
-                      },
-                    }}
-                  >
-                    {thread.markdown}
-                  </ReactMarkdown>
-                </div>
-              ) : null}
-            </article>
-          ))
+          threads.map((thread) => {
+            const isOpen = openThreadIds.has(thread.id);
+
+            return (
+              <article className="mb-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950" key={thread.id}>
+                <button
+                  aria-expanded={isOpen}
+                  className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-slate-900/70"
+                  onClick={() => {
+                    setOpenThreadIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(thread.id)) {
+                        next.delete(thread.id);
+                      } else {
+                        next.add(thread.id);
+                      }
+                      return next;
+                    });
+                  }}
+                  type="button"
+                >
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-slate-100">{thread.title}</h3>
+                    {thread.context ? (
+                      <div className="mt-1 truncate text-xs text-slate-500">
+                        {thread.context.filePath}
+                        {thread.context.startLine ? `:L${thread.context.startLine}` : ""}
+                        {thread.context.endLine && thread.context.endLine !== thread.context.startLine ? `-L${thread.context.endLine}` : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={statusClass(thread.status)}>{thread.status}</span>
+                    <span aria-hidden="true" className="w-3 text-center text-sm text-slate-500">
+                      {isOpen ? "-" : "+"}
+                    </span>
+                  </div>
+                </button>
+
+                {isOpen ? (
+                  <div className="px-4 pb-4">
+                    {(thread.status === "queued" || thread.status === "running") && !thread.markdown ? (
+                      <p className="text-sm text-slate-400">Codex is working...</p>
+                    ) : null}
+                    {thread.error ? <p className="text-sm text-rose-300">{thread.error}</p> : null}
+                    {thread.markdown ? (
+                      <div className="markdown-body text-sm leading-6 text-slate-300">
+                        <ReactMarkdown
+                          components={{
+                            code({ children, className }) {
+                              const language = /language-(\w+)/.exec(className ?? "")?.[1];
+                              const source = String(children).replace(/\n$/, "");
+                              if (language === "mermaid") {
+                                return <MermaidBlock source={source} />;
+                              }
+                              return <code className={className}>{children}</code>;
+                            },
+                          }}
+                        >
+                          {thread.markdown}
+                        </ReactMarkdown>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })
         )}
       </div>
     </aside>
