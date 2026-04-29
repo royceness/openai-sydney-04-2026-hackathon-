@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AIWorkbench, parseCodeReference } from "./AIWorkbench";
@@ -25,6 +25,7 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
       pendingCommentBody={null}
       selection={null}
       threadError={null}
+      threadNavigationRequest={null}
       threads={[]}
       {...props}
     />,
@@ -125,12 +126,12 @@ describe("AIWorkbench", () => {
     expect(header).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("This is the thread body.")).toBeInTheDocument();
 
-    await userEvent.click(header);
+    fireEvent.click(header);
 
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("This is the thread body.")).not.toBeInTheDocument();
 
-    await userEvent.click(header);
+    fireEvent.click(header);
 
     expect(header).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("This is the thread body.")).toBeVisible();
@@ -167,6 +168,7 @@ describe("AIWorkbench", () => {
         pendingCommentBody={null}
         selection={null}
         threadError={null}
+        threadNavigationRequest={null}
         threads={[
           {
             id: "thr_1",
@@ -253,6 +255,7 @@ describe("AIWorkbench", () => {
         pendingCommentBody={null}
         selection={null}
         threadError={null}
+        threadNavigationRequest={null}
         threads={[thread]}
       />,
     );
@@ -264,5 +267,60 @@ describe("AIWorkbench", () => {
     await userEvent.click(screen.getByRole("button", { name: "Follow up" }));
 
     expect(onFollowUp).toHaveBeenCalledWith("thr_1", "What test catches this?");
+  });
+
+  it("opens, scrolls to, and flashes a navigated thread", async () => {
+    const scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const onActivateThread = vi.fn();
+    const thread = {
+      id: "thr_1",
+      source: "manual" as const,
+      title: "Found issue",
+      status: "complete" as const,
+      markdown: "This thread found an issue.",
+      codex_thread_id: "codex-thread-1",
+      created_at: "2026-04-29T00:00:00Z",
+      updated_at: "2026-04-29T00:00:00Z",
+    };
+    const { rerender } = renderWorkbench({
+      activeThreadId: "thr_1",
+      onActivateThread,
+      threads: [thread],
+    });
+
+    const header = screen.getByRole("button", { name: /Found issue/ });
+    await userEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    rerender(
+      <AIWorkbench
+        activeThreadId={null}
+        comments={[]}
+        onActivateThread={onActivateThread}
+        onAsk={vi.fn()}
+        onDeleteComment={vi.fn()}
+        onFollowUp={vi.fn()}
+        onNavigateReference={vi.fn()}
+        pendingCommentBody={null}
+        selection={null}
+        threadError={null}
+        threadNavigationRequest={{ threadId: "thr_1", requestId: 1 }}
+        threads={[thread]}
+      />,
+    );
+
+    expect(onActivateThread).toHaveBeenLastCalledWith("thr_1");
+    expect(screen.getByRole("button", { name: /Found issue/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("This thread found an issue.")).toBeInTheDocument();
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    requestAnimationFrame.mockRestore();
+    cancelAnimationFrame.mockRestore();
   });
 });

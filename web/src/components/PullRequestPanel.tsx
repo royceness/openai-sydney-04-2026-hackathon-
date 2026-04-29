@@ -11,6 +11,7 @@ export function PullRequestPanel({
   onEditComment,
   onFollowUp,
   onNavigateFile,
+  onNavigateThread,
   pr,
   selection,
   threads,
@@ -24,6 +25,7 @@ export function PullRequestPanel({
   onEditComment: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
+  onNavigateThread: (threadId: string) => void;
   pr: PullRequestInfo;
   selection: CodeSelection | null;
   threads: ReviewThread[];
@@ -56,6 +58,7 @@ export function PullRequestPanel({
           onEditComment={onEditComment}
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
+          onNavigateThread={onNavigateThread}
           selection={selection}
           threads={threads}
         />

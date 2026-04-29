@@ -28,6 +28,11 @@ type FileNavigationRequest =
       filePath: string;
     };
 
+type ThreadNavigationRequest = {
+  threadId?: string;
+  title?: string;
+};
+
 export function VoiceSelectionDemo({
   activeFile,
   activeThreadId,
@@ -38,6 +43,7 @@ export function VoiceSelectionDemo({
   onEditComment,
   onFollowUp,
   onNavigateFile,
+  onNavigateThread,
   selection,
   threads,
 }: {
@@ -50,6 +56,7 @@ export function VoiceSelectionDemo({
   onEditComment: (commentId: string, body: string) => EditCommentResult;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
+  onNavigateThread: (threadId: string) => void;
   selection: CodeSelection | null;
   threads: ReviewThread[];
 }) {
@@ -66,6 +73,7 @@ export function VoiceSelectionDemo({
   const onEditCommentRef = useRef(onEditComment);
   const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
+  const onNavigateThreadRef = useRef(onNavigateThread);
   const selectionRef = useRef<CodeSelection | null>(selection);
   const threadsRef = useRef<ReviewThread[]>(threads);
   const lastLoggedUserTranscriptRef = useRef<string | null>(null);
@@ -105,6 +113,10 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     onNavigateFileRef.current = onNavigateFile;
   }, [onNavigateFile]);
+
+  useEffect(() => {
+    onNavigateThreadRef.current = onNavigateThread;
+  }, [onNavigateThread]);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -185,6 +197,24 @@ export function VoiceSelectionDemo({
           const result = searchThreadsByText(threadsRef.current, query);
           setPopup({ title: "Thread search", body: threadSearchPopupText(result) });
           return { ok: true, ...result };
+        },
+      }),
+      defineVoiceTool({
+        name: "navigate_review_thread",
+        description: "Navigate the AI workbench to a loaded Review Room thread by thread id or title. This opens the accordion, scrolls to it, and briefly highlights it.",
+        parameters: z.object({
+          threadId: z.string().optional().describe("Review Room thread id, preferred when available."),
+          title: z.string().optional().describe("Thread title or title fragment when the id is not available."),
+        }),
+        execute: ({ threadId, title }) => {
+          const result = resolveThreadNavigation({ threadId, title }, threadsRef.current);
+          if (!result.ok) {
+            setPopup({ title: "Thread navigation", body: result.message });
+            return result;
+          }
+          onNavigateThreadRef.current(result.thread.id);
+          setPopup({ title: "Thread navigation", body: `Showing ${result.thread.title}` });
+          return result;
         },
       }),
       defineVoiceTool({
@@ -311,7 +341,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onEvent: (event) => {
         logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
       },
@@ -479,6 +509,16 @@ export type FileNavigationResult =
       message: string;
     };
 
+export type ThreadNavigationResult =
+  | {
+      ok: true;
+      thread: ReviewThreadVoiceListItem;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
 export function resolveFileNavigation(
   request: FileNavigationRequest,
   files: ChangedFile[],
@@ -517,6 +557,39 @@ export function resolveFileNavigation(
     return { ok: false, message: `Multiple files match ${request.filePath}: ${partialMatches.map((file) => file.path).join(", ")}` };
   }
   return { ok: false, message: `No changed file matches ${request.filePath}.` };
+}
+
+export function resolveThreadNavigation(request: ThreadNavigationRequest, threads: ReviewThread[]): ThreadNavigationResult {
+  const requestedThreadId = request.threadId?.trim();
+  if (requestedThreadId) {
+    const thread = threads.find((candidate) => candidate.id === requestedThreadId);
+    if (thread) {
+      return { ok: true, thread: summarizeThreadNavigationTarget(thread) };
+    }
+    return { ok: false, message: `No workbench thread matches ${requestedThreadId}.` };
+  }
+
+  const title = normalizeFileQuery(request.title);
+  if (!title) {
+    return { ok: false, message: "Provide a thread id or title to navigate to." };
+  }
+
+  const exactMatches = threads.filter((thread) => normalizeFileQuery(thread.title) === title);
+  if (exactMatches.length === 1) {
+    return { ok: true, thread: summarizeThreadNavigationTarget(exactMatches[0]) };
+  }
+  if (exactMatches.length > 1) {
+    return { ok: false, message: `Multiple threads are named ${request.title}. Use a thread id.` };
+  }
+
+  const partialMatches = threads.filter((thread) => normalizeFileQuery(thread.title).includes(title));
+  if (partialMatches.length === 1) {
+    return { ok: true, thread: summarizeThreadNavigationTarget(partialMatches[0]) };
+  }
+  if (partialMatches.length > 1) {
+    return { ok: false, message: `Multiple threads match ${request.title}: ${partialMatches.map((thread) => thread.id).join(", ")}` };
+  }
+  return { ok: false, message: `No workbench thread matches ${request.title}.` };
 }
 
 function normalizeFileQuery(value: string | undefined) {
@@ -608,13 +681,7 @@ export function buildReviewRoomContext({
 }
 
 export function listThreadSummariesForVoice(threads: ReviewThread[]): ReviewThreadVoiceListItem[] {
-  return threads.map((thread) => ({
-    id: thread.id,
-    codexThreadId: thread.codex_thread_id ?? null,
-    title: thread.title,
-    status: thread.status,
-    source: thread.source,
-  }));
+  return threads.map(summarizeThreadNavigationTarget);
 }
 
 export function getThreadTextByLineRange(
@@ -712,6 +779,16 @@ function summarizeThreadForVoice(thread: ReviewThread): ThreadVoiceSummary {
     status: thread.status,
     context: thread.context ?? null,
     markdownExcerpt: thread.markdown ? truncateForVoice(thread.markdown, 1200) : null,
+  };
+}
+
+function summarizeThreadNavigationTarget(thread: ReviewThread): ReviewThreadVoiceListItem {
+  return {
+    id: thread.id,
+    codexThreadId: thread.codex_thread_id ?? null,
+    title: thread.title,
+    status: thread.status,
+    source: thread.source,
   };
 }
 

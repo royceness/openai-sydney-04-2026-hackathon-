@@ -15,6 +15,11 @@ type ReviewState = {
   threads: ReviewThread[];
 };
 
+export type ThreadNavigationRequest = {
+  threadId: string;
+  requestId: number;
+};
+
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>("booting");
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +31,7 @@ export default function App() {
   const [threadError, setThreadError] = useState<string | null>(null);
   const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threadNavigationRequest, setThreadNavigationRequest] = useState<ThreadNavigationRequest | null>(null);
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
@@ -37,6 +43,7 @@ export default function App() {
     setSelection(null);
     setTargetReference(null);
     setActiveThreadId(null);
+    setThreadNavigationRequest(null);
     setComments([]);
     setPendingCommentBody(null);
     try {
@@ -282,6 +289,14 @@ export default function App() {
     return { status: "deleted" as const };
   }, []);
 
+  const handleNavigateThread = useCallback((threadId: string) => {
+    setActiveThreadId(threadId);
+    setThreadNavigationRequest({
+      threadId,
+      requestId: Date.now(),
+    });
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -318,6 +333,7 @@ export default function App() {
             setActiveFile(filePath);
             setSelection(null);
           }}
+          onNavigateThread={handleNavigateThread}
           pr={review.pr}
           selection={selection}
           threads={review.threads}
@@ -335,6 +351,7 @@ export default function App() {
         activeThreadId={activeThreadId}
         comments={comments}
         pendingCommentBody={pendingCommentBody}
+        threadNavigationRequest={threadNavigationRequest}
         threads={review.threads}
         selection={selection}
         threadError={threadError}

@@ -8,6 +8,7 @@ import {
   listThreadSummariesForVoice,
   resolveFileNavigation,
   resolveFollowUpThread,
+  resolveThreadNavigation,
   searchThreadsByText,
   selectedLocationMessage,
   VoiceSelectionDemo,
@@ -93,6 +94,7 @@ function renderVoiceSelectionDemo({
   onEditComment = vi.fn(() => ({ status: "updated" as const })),
   onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
+  onNavigateThread = vi.fn(),
   selection = selectedCode,
   threads = [completedThread],
 }: {
@@ -105,6 +107,7 @@ function renderVoiceSelectionDemo({
   onEditComment?: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
   onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
+  onNavigateThread?: (threadId: string) => void;
   selection?: CodeSelection | null;
   threads?: ReviewThread[];
 } = {}) {
@@ -119,6 +122,7 @@ function renderVoiceSelectionDemo({
       onEditComment={onEditComment}
       onFollowUp={onFollowUp}
       onNavigateFile={onNavigateFile}
+      onNavigateThread={onNavigateThread}
       selection={selection}
       threads={threads}
     />,
@@ -227,6 +231,33 @@ describe("VoiceSelectionDemo", () => {
     });
   });
 
+  it("resolves thread navigation by id and title", () => {
+    expect(resolveThreadNavigation({ threadId: "thr_issue" }, [completedThread])).toEqual({
+      ok: true,
+      thread: {
+        id: "thr_issue",
+        codexThreadId: "codex-thread-1",
+        title: "Found issue",
+        status: "complete",
+        source: "manual",
+      },
+    });
+    expect(resolveThreadNavigation({ title: "issue" }, [completedThread])).toEqual({
+      ok: true,
+      thread: {
+        id: "thr_issue",
+        codexThreadId: "codex-thread-1",
+        title: "Found issue",
+        status: "complete",
+        source: "manual",
+      },
+    });
+    expect(resolveThreadNavigation({}, [completedThread])).toEqual({
+      ok: false,
+      message: "Provide a thread id or title to navigate to.",
+    });
+  });
+
   it("configures the realtime voice component with the selected-text tool", () => {
     renderVoiceSelectionDemo();
 
@@ -269,6 +300,9 @@ describe("VoiceSelectionDemo", () => {
           }),
           expect.objectContaining({
             name: "search_review_threads",
+          }),
+          expect.objectContaining({
+            name: "navigate_review_thread",
           }),
           expect.objectContaining({
             name: "navigate_file",
@@ -401,6 +435,29 @@ describe("VoiceSelectionDemo", () => {
         },
       ],
     });
+  });
+
+  it("navigates to a loaded review thread when the realtime tool executes", async () => {
+    const onNavigateThread = vi.fn();
+    const options = renderVoiceSelectionDemo({ onNavigateThread });
+    const navigateThread = options.tools.find((tool) => tool.name === "navigate_review_thread");
+    if (!navigateThread) {
+      throw new Error("Expected thread navigation voice tool");
+    }
+
+    expect(navigateThread.execute({ threadId: "thr_issue" })).toEqual({
+      ok: true,
+      thread: {
+        id: "thr_issue",
+        codexThreadId: "codex-thread-1",
+        title: "Found issue",
+        status: "complete",
+        source: "manual",
+      },
+    });
+
+    expect(onNavigateThread).toHaveBeenCalledWith("thr_issue");
+    expect(await screen.findByText("Showing Found issue")).toBeInTheDocument();
   });
 
   it("prompts for a focused thread when a follow-up target is ambiguous", async () => {
