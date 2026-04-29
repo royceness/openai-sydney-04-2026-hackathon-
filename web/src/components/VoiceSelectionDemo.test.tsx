@@ -4,8 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
 import {
   buildReviewRoomContext,
+  getThreadTextByLineRange,
+  listThreadSummariesForVoice,
   resolveFileNavigation,
   resolveFollowUpThread,
+  searchThreadsByText,
   selectedLocationMessage,
   VoiceSelectionDemo,
 } from "./VoiceSelectionDemo";
@@ -74,7 +77,7 @@ const completedThread: ReviewThread = {
   title: "Found issue",
   status: "complete",
   codex_thread_id: "codex-thread-1",
-  markdown: "This thread found a validation issue.",
+  markdown: "This thread found a validation issue.\nIt needs a regression test.\nThe fix is small.",
   context: selectedCode,
   created_at: "2026-04-29T00:00:00Z",
   updated_at: "2026-04-29T00:00:00Z",
@@ -181,6 +184,49 @@ describe("VoiceSelectionDemo", () => {
     });
   });
 
+  it("lists loaded review thread ids and names for voice", () => {
+    expect(listThreadSummariesForVoice([completedThread])).toEqual([
+      {
+        id: "thr_issue",
+        codexThreadId: "codex-thread-1",
+        title: "Found issue",
+        status: "complete",
+        source: "manual",
+      },
+    ]);
+  });
+
+  it("reads review thread text by 1-based line range", () => {
+    expect(getThreadTextByLineRange([completedThread], "thr_issue", 2, 3)).toEqual({
+      ok: true,
+      threadId: "thr_issue",
+      title: "Found issue",
+      startLine: 2,
+      endLine: 3,
+      totalLines: 3,
+      text: "It needs a regression test.\nThe fix is small.",
+    });
+    expect(getThreadTextByLineRange([completedThread], "missing", 1, 1)).toEqual({
+      ok: false,
+      message: "No workbench thread matches missing.",
+    });
+  });
+
+  it("searches loaded review threads with simple text matching", () => {
+    expect(searchThreadsByText([completedThread], "REGRESSION")).toEqual({
+      query: "REGRESSION",
+      matches: [
+        {
+          threadId: "thr_issue",
+          codexThreadId: "codex-thread-1",
+          title: "Found issue",
+          line: 2,
+          text: "It needs a regression test.",
+        },
+      ],
+    });
+  });
+
   it("configures the realtime voice component with the selected-text tool", () => {
     renderVoiceSelectionDemo();
 
@@ -214,6 +260,15 @@ describe("VoiceSelectionDemo", () => {
           }),
           expect.objectContaining({
             name: "get_review_room_context",
+          }),
+          expect.objectContaining({
+            name: "list_review_threads",
+          }),
+          expect.objectContaining({
+            name: "get_review_thread_text",
+          }),
+          expect.objectContaining({
+            name: "search_review_threads",
           }),
           expect.objectContaining({
             name: "navigate_file",
@@ -298,6 +353,54 @@ describe("VoiceSelectionDemo", () => {
 
     expect(onFollowUp).toHaveBeenCalledWith("thr_issue", "What test would catch this?");
     expect(await screen.findByText("Follow-up started")).toBeInTheDocument();
+  });
+
+  it("lists, reads, and searches currently loaded thread text when realtime tools execute", async () => {
+    const options = renderVoiceSelectionDemo();
+    const listThreads = options.tools.find((tool) => tool.name === "list_review_threads");
+    const getThreadText = options.tools.find((tool) => tool.name === "get_review_thread_text");
+    const searchThreads = options.tools.find((tool) => tool.name === "search_review_threads");
+    if (!listThreads || !getThreadText || !searchThreads) {
+      throw new Error("Expected thread inspection voice tools");
+    }
+
+    expect(listThreads.execute({})).toEqual({
+      ok: true,
+      threads: [
+        {
+          id: "thr_issue",
+          codexThreadId: "codex-thread-1",
+          title: "Found issue",
+          status: "complete",
+          source: "manual",
+        },
+      ],
+    });
+    expect(await screen.findByText("Review threads")).toBeInTheDocument();
+
+    expect(getThreadText.execute({ threadId: "thr_issue", startLine: 2, endLine: 2 })).toEqual({
+      ok: true,
+      threadId: "thr_issue",
+      title: "Found issue",
+      startLine: 2,
+      endLine: 2,
+      totalLines: 3,
+      text: "It needs a regression test.",
+    });
+
+    expect(searchThreads.execute({ query: "small" })).toEqual({
+      ok: true,
+      query: "small",
+      matches: [
+        {
+          threadId: "thr_issue",
+          codexThreadId: "codex-thread-1",
+          title: "Found issue",
+          line: 3,
+          text: "The fix is small.",
+        },
+      ],
+    });
   });
 
   it("prompts for a focused thread when a follow-up target is ambiguous", async () => {
