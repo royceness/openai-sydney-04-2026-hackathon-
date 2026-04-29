@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
 from review_room.models import (
     BootstrapResponse,
@@ -28,6 +29,7 @@ app.add_middleware(
 
 store = ReviewStore()
 github = GitHubClient()
+checkout = RepoCheckoutService(store.workspace_dir)
 
 
 @app.get("/api/bootstrap", response_model=BootstrapResponse)
@@ -45,6 +47,11 @@ async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
     except GitHubError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    try:
+        repo_path = await checkout.checkout_pull_request(parsed)
+    except CheckoutError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     review_id = stable_review_id(parsed.owner, parsed.repo, parsed.number)
     session = ReviewSession(
         id=review_id,
@@ -52,6 +59,7 @@ async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
         files=files,
         threads=[],
         comments=[],
+        repo_path=str(repo_path),
         created_at=datetime.now(timezone.utc),
     )
     store.save(session)
@@ -80,4 +88,3 @@ async def get_file_diff(review_id: str, file_path: str) -> FileDiffResponse:
             return FileDiffResponse(file_path=changed_file.path, diff=changed_file.patch)
 
     raise HTTPException(status_code=404, detail="Changed file not found")
-

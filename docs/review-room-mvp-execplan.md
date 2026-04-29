@@ -19,6 +19,10 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
 - [x] (2026-04-29T01:35:50Z) Rendered a real unified diff for the active file and compute explicit browser text selection into a selected code context.
 - [x] (2026-04-29T01:35:50Z) Added backend and frontend tests for Stage 1 and Stage 2 behavior.
 - [x] (2026-04-29T01:35:50Z) Ran backend tests, frontend tests, frontend build, and a live GitHub smoke test.
+- [x] (2026-04-29T01:40:22Z) Committed Stage 1 and Stage 2 as `790a398` on branch `codex/review-room-mvp`.
+- [x] (2026-04-29T01:42:38Z) Implemented Stage 3 local checkout so review creation reuses a shared clone and creates or reuses a per-PR worktree under `.review-room/repos/`.
+- [x] (2026-04-29T01:42:38Z) Added backend tests for checkout path construction, git command execution boundaries, existing worktree reuse, and review-session `repo_path` persistence.
+- [x] (2026-04-29T01:42:38Z) Ran backend tests after Stage 3 and a live git checkout smoke test.
 
 ## Surprises & Discoveries
 
@@ -30,6 +34,9 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
 
 - Observation: The live GitHub fetch path works against a public PR.
   Evidence: A smoke script fetched `https://github.com/octocat/Hello-World/pull/1` and printed `Edited README via GitHub`, `1`, `README`, and `patch`.
+
+- Observation: A shared clone plus git worktrees is a better fit than a full clone per PR for large repositories.
+  Evidence: The user noted the target repo is huge and requested repo reuse. The implemented smoke test checked out `octocat/Hello-World#1` to `.review-room/repos/octocat/Hello-World/worktrees/pr-1`.
 
 ## Decision Log
 
@@ -49,9 +56,13 @@ Review Room is a voice-first code review cockpit for GitHub pull requests. This 
   Rationale: The user explicitly wants real Codex integration later and does not want a misleading fallback path. Tests may use stubs at unit boundaries, but production runtime should fail visibly when required integrations fail.
   Date/Author: 2026-04-29 / Codex
 
+- Decision: Reuse one shared clone per GitHub repository and create one worktree per PR.
+  Rationale: Large repositories should not be recloned for every review session. A git worktree gives each PR its own checked-out directory for Codex while the object database and fetched refs are shared by the repository clone.
+  Date/Author: 2026-04-29 / Codex
+
 ## Outcomes & Retrospective
 
-Stage 1 and Stage 2 are implemented. The app can bootstrap from a configured or query-string PR URL, fetch public GitHub PR metadata and changed files, persist a file-backed review session, render a three-pane UI, show a real unified diff, and compute a visible selected-code context from browser text selection. Remaining MVP work starts at the next milestone: local checkout, then manual Codex-backed review threads.
+Stage 1, Stage 2, and Stage 3 are implemented. The app can bootstrap from a configured or query-string PR URL, fetch public GitHub PR metadata and changed files, persist a file-backed review session, render a three-pane UI, show a real unified diff, compute a visible selected-code context from browser text selection, and check out the PR into a reusable local git worktree. Remaining MVP work starts at the next milestone: manual Codex-backed review threads.
 
 ## Context and Orientation
 
@@ -96,7 +107,7 @@ Run backend tests:
 
 Current result:
 
-    8 passed in 0.41s
+    13 passed in 0.13s
 
 Run frontend tests:
 
@@ -141,7 +152,7 @@ For automated validation, run the backend and frontend test commands above. For 
 
 The app writes session JSON files under `.review-room/sessions/`. Re-running `POST /api/reviews` for the same PR overwrites the saved metadata with the latest GitHub API response and preserves the same stable review ID. This is safe for Stage 1 and Stage 2 because there are no Codex threads or draft comments yet. If a session becomes confusing during manual testing, stop the servers and remove the relevant JSON file under `.review-room/sessions/`; the app will recreate it on the next load.
 
-Dependency installation through `uv sync` and `npm install` is safe to repeat. The backend does not publish to GitHub and does not clone repositories in this plan.
+Dependency installation through `uv sync` and `npm install` is safe to repeat. The backend does not publish to GitHub. After Stage 3, the backend clones repositories only into `.review-room/repos/`. The clone is reused across PRs for the same `{owner}/{repo}` and each PR gets a worktree under `.review-room/repos/{owner}/{repo}/worktrees/pr-{number}`. If a worktree already exists, creating the same review again fetches the PR ref into `refs/remotes/review-room/pr-{number}` and checks out that ref in the existing worktree. If the worktree has local modifications, git may fail rather than silently discarding them.
 
 ## Artifacts and Notes
 
@@ -175,8 +186,12 @@ Frontend type names that must exist by the end of this plan include `PullRequest
 
 ## Debt and Future Issues
 
-The following work is intentionally left for later milestones in this same project and should not be tracked as separate debt yet: local checkout, real Codex app-server integration, manual workbench questions, real-time voice tool-calling, local draft comments, automatic initial review threads, GitHub write-back, rich Mermaid rendering, and persistent multi-user storage.
+The following work is intentionally left for later milestones in this same project and should not be tracked as separate debt yet: real Codex app-server integration, manual workbench questions, real-time voice tool-calling, local draft comments, automatic initial review threads, GitHub write-back, rich Mermaid rendering, and persistent multi-user storage.
 
 Revision note, 2026-04-29: Created the initial living ExecPlan for Stage 1 and Stage 2 so implementation can proceed from a self-contained document.
 
 Revision note, 2026-04-29: Updated the plan after implementing Stage 1 and Stage 2, recording the completed files, tests, and live GitHub smoke validation.
+
+Revision note, 2026-04-29: Began Stage 3. Local checkout is no longer future debt for this plan; it is the active milestone needed before Codex-backed manual threads.
+
+Revision note, 2026-04-29: Completed Stage 3 using shared repository clones and per-PR git worktrees after the user noted the repository is huge and should be reused across sessions.

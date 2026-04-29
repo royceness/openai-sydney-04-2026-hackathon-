@@ -36,6 +36,11 @@ class FakeGitHubClient:
         )
 
 
+class FakeCheckoutService:
+    async def checkout_pull_request(self, parsed: ParsedPullRequestUrl) -> Path:
+        return Path("/tmp/review-room/repos") / parsed.owner / parsed.repo / "worktrees" / f"pr-{parsed.number}"
+
+
 def test_bootstrap_returns_configured_pr_url(monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_ROOM_PR_URL", "https://github.com/acme/review-room/pull/247")
     client = TestClient(main.app)
@@ -49,6 +54,7 @@ def test_bootstrap_returns_configured_pr_url(monkeypatch) -> None:
 def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
     monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
     client = TestClient(main.app)
 
     create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
@@ -58,8 +64,11 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
     assert created["review_id"] == "rev_acme_review_room_247"
     assert created["files"][0]["path"] == "src/review/diagram.ts"
 
+    session_response = client.get("/api/reviews/rev_acme_review_room_247")
+    assert session_response.status_code == 200
+    assert session_response.json()["repo_path"] == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
+
     diff_response = client.get("/api/reviews/rev_acme_review_room_247/files/src/review/diagram.ts/diff")
 
     assert diff_response.status_code == 200
     assert diff_response.json() == {"file_path": "src/review/diagram.ts", "diff": "@@ -1 +1 @@\n-old\n+new"}
-
