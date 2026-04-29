@@ -106,11 +106,13 @@ vi.mock("./components/AIWorkbench", () => ({
   AIWorkbench: ({
     commentError,
     comments,
+    onDiagramChanges,
     onPublishComments,
     pendingCommentBody,
   }: {
     commentError: string | null;
     comments: DraftComment[];
+    onDiagramChanges: () => Promise<void>;
     onPublishComments: (body: string, event: ReviewSubmission["event"]) => Promise<void>;
     pendingCommentBody: string | null;
     threads: ReviewThread[];
@@ -120,6 +122,9 @@ vi.mock("./components/AIWorkbench", () => ({
       {commentError ? <div>Comment error: {commentError}</div> : null}
       <button onClick={() => void onPublishComments("", null)} type="button">
         Publish comments
+      </button>
+      <button onClick={() => void onDiagramChanges()} type="button">
+        Diagram changes
       </button>
       {comments.map((comment) => (
         <div key={comment.id}>
@@ -195,6 +200,43 @@ describe("App draft comments", () => {
       "href",
       "https://github.com/octocat/Hello-World/pull/1#discussion_r1",
     );
+  });
+
+  it("starts a titled diagram changes thread", async () => {
+    const api = await import("./api");
+    vi.mocked(api.createThread).mockResolvedValueOnce({ thread_id: "thr_diagram", status: "queued" });
+    vi.mocked(api.getReview).mockResolvedValueOnce({
+      id: "rev_1",
+      pr,
+      files,
+      comments: [],
+      threads: [
+        {
+          id: "thr_diagram",
+          source: "manual",
+          title: "Diagram changes",
+          status: "queued",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+      ],
+      submission: { body: "", event: null },
+      created_at: "2026-04-29T00:00:00Z",
+      updated_at: "2026-04-29T00:00:00Z",
+    });
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Diagram changes"));
+
+    expect(api.createThread).toHaveBeenCalledWith({
+      reviewId: "rev_1",
+      source: "manual",
+      title: "Diagram changes",
+      utterance: expect.stringContaining("Make a Mermaid diagram"),
+      context: null,
+    });
   });
 
   it("keeps comments retryable when GitHub publishing fails", async () => {

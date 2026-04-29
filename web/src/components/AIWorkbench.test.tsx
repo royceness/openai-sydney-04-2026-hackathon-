@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AIWorkbench, parseCodeReference } from "./AIWorkbench";
@@ -21,6 +21,7 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
       onActivateThread={vi.fn()}
       onAsk={vi.fn()}
       onDeleteComment={vi.fn()}
+      onDiagramChanges={vi.fn()}
       onFollowUp={vi.fn()}
       onNavigateReference={vi.fn()}
       onPublishComments={vi.fn()}
@@ -56,6 +57,15 @@ describe("AIWorkbench", () => {
     expect(onAsk).toHaveBeenCalledWith("Explain this function");
   });
 
+  it("starts a diagram changes thread from the quick action", async () => {
+    const onDiagramChanges = vi.fn().mockResolvedValue(undefined);
+    renderWorkbench({ onDiagramChanges });
+
+    await userEvent.click(screen.getByRole("button", { name: /Diagram changes/ }));
+
+    expect(onDiagramChanges).toHaveBeenCalledTimes(1);
+  });
+
   it("renders completed markdown thread output", () => {
     renderWorkbench({
       threads: [
@@ -75,6 +85,57 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
+  });
+
+  it("surfaces initial analysis thread status and opens a clicked thread", async () => {
+    const onActivateThread = vi.fn();
+    const scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    renderWorkbench({
+      activeThreadId: "thr_summary",
+      onActivateThread,
+      threads: [
+        {
+          id: "thr_summary",
+          source: "init",
+          title: "PR summary",
+          status: "complete",
+          markdown: "Summary body.",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+        {
+          id: "thr_tests",
+          source: "init",
+          title: "Tests audit",
+          status: "running",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+      ],
+    });
+
+    const dashboard = screen.getByRole("region", { name: "Initial analysis" });
+    const summaryCard = within(dashboard).getByRole("button", { name: /PR summary complete/ });
+    expect(within(dashboard).getByText("1 of 2 complete")).toBeInTheDocument();
+    expect(summaryCard).toBeInTheDocument();
+    expect(within(dashboard).getByRole("button", { name: /Tests audit running/ })).toBeInTheDocument();
+
+    const threadHeader = screen.getAllByRole("button", { name: /PR summary/ }).find((button) => button.getAttribute("aria-expanded") === "true");
+    expect(threadHeader).toBeDefined();
+    await userEvent.click(threadHeader!);
+    expect(screen.queryByText("Summary body.")).not.toBeInTheDocument();
+
+    await userEvent.click(summaryCard);
+    expect(onActivateThread).toHaveBeenCalledWith("thr_summary");
+    expect(screen.getByText("Summary body.")).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+
+    requestAnimationFrame.mockRestore();
   });
 
   it("renders and deletes local PR comment drafts", async () => {
@@ -227,6 +288,7 @@ describe("AIWorkbench", () => {
         onActivateThread={vi.fn()}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
+        onDiagramChanges={vi.fn()}
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
@@ -336,6 +398,7 @@ describe("AIWorkbench", () => {
         onActivateThread={onActivateThread}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
+        onDiagramChanges={vi.fn()}
         onFollowUp={onFollowUp}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
@@ -396,6 +459,7 @@ describe("AIWorkbench", () => {
         onActivateThread={onActivateThread}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
+        onDiagramChanges={vi.fn()}
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
