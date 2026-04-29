@@ -9,6 +9,7 @@ export function PullRequestPanel({
   onFollowUp,
   onNavigateFile,
   pr,
+  reviewId,
   selection,
   threads,
 }: {
@@ -19,6 +20,7 @@ export function PullRequestPanel({
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   pr: PullRequestInfo;
+  reviewId: string;
   selection: CodeSelection | null;
   threads: ReviewThread[];
 }) {
@@ -47,6 +49,7 @@ export function PullRequestPanel({
           onAsk={onAsk}
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
+          reviewId={reviewId}
           selection={selection}
           threads={threads}
         />

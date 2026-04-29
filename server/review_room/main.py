@@ -23,6 +23,7 @@ from review_room.models import (
     CreateReviewResponse,
     CreateThreadRequest,
     CreateThreadResponse,
+    FileContentResponse,
     FileDiffResponse,
     ReviewSession,
     ReviewThread,
@@ -185,6 +186,55 @@ async def get_file_diff(review_id: str, file_path: str) -> FileDiffResponse:
     raise HTTPException(status_code=404, detail="Changed file not found")
 
 
+@app.get("/api/reviews/{review_id}/files/{file_path:path}/content", response_model=FileContentResponse)
+async def get_file_content(
+    review_id: str,
+    file_path: str,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    context: int = 0,
+) -> FileContentResponse:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    changed_file = next((item for item in session.files if item.path == file_path), None)
+    if changed_file is None:
+        raise HTTPException(status_code=404, detail="Changed file not found")
+    if session.repo_path is None:
+        raise HTTPException(status_code=409, detail="Review session has no checked-out repository")
+    if context < 0:
+        raise HTTPException(status_code=400, detail="Context must be zero or greater")
+
+    repo_root = Path(session.repo_path).resolve()
+    target_path = (repo_root / file_path).resolve()
+    try:
+        target_path.relative_to(repo_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="File path escapes repository checkout") from exc
+
+    if not target_path.is_file():
+        if changed_file.status == "removed":
+            raise HTTPException(status_code=422, detail="Removed files have no content in the PR checkout")
+        raise HTTPException(status_code=404, detail="File content not found in checkout")
+
+    try:
+        lines = target_path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="File content is not UTF-8 text") from exc
+
+    start, end = _requested_line_window(start_line, end_line, context, len(lines))
+    content = "\n".join(lines[start - 1 : end]) if start > 0 and end > 0 else ""
+    return FileContentResponse(
+        file_path=changed_file.path,
+        start_line=start,
+        end_line=end,
+        total_lines=len(lines),
+        content=content,
+    )
+
+
 @app.post("/api/reviews/{review_id}/threads", response_model=CreateThreadResponse)
 async def create_thread(
     review_id: str,
@@ -241,3 +291,26 @@ async def create_follow_up(
     prompt = build_follow_up_prompt(request.utterance)
     background_tasks.add_task(run_thread_follow_up, store, agent, review_id, thread.id, prompt, request.utterance)
     return CreateFollowUpResponse(thread_id=thread.id, status=thread.status)
+
+
+def _requested_line_window(
+    start_line: int | None,
+    end_line: int | None,
+    context: int,
+    total_lines: int,
+) -> tuple[int, int]:
+    if total_lines == 0:
+        return 0, 0
+    if start_line is not None and start_line < 1:
+        raise HTTPException(status_code=400, detail="start_line must be at least 1")
+    if end_line is not None and end_line < 1:
+        raise HTTPException(status_code=400, detail="end_line must be at least 1")
+
+    requested_start = start_line if start_line is not None else 1
+    requested_end = end_line if end_line is not None else (requested_start if start_line is not None else total_lines)
+    if requested_end < requested_start:
+        raise HTTPException(status_code=400, detail="end_line must be greater than or equal to start_line")
+
+    start = max(1, requested_start - context)
+    end = min(total_lines, requested_end + context)
+    return start, end

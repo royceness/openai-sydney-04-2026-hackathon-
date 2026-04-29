@@ -25,6 +25,7 @@ describe("PullRequestPanel", () => {
         onAsk={async () => undefined}
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
+        reviewId="rev_acme_review_room_247"
         selection={null}
         threads={[]}
       />,

@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
 import {
   buildReviewRoomContext,
+  formatChangedLineSummaries,
   resolveFileNavigation,
   resolveFollowUpThread,
   selectedLocationMessage,
+  summarizeChangedLines,
   VoiceSelectionDemo,
 } from "./VoiceSelectionDemo";
 
@@ -87,6 +89,16 @@ function renderVoiceSelectionDemo({
   onAsk = vi.fn(() => Promise.resolve()),
   onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
+  readFileContent = vi.fn(() =>
+    Promise.resolve({
+      file_path: "src/review/diagram.ts",
+      start_line: 200,
+      end_line: 203,
+      total_lines: 300,
+      content: "before\nconst total = items.length;\nafter",
+    }),
+  ),
+  reviewId = "rev_acme_review_room_247",
   selection = selectedCode,
   threads = [completedThread],
 }: {
@@ -96,6 +108,20 @@ function renderVoiceSelectionDemo({
   onAsk?: (utterance: string) => Promise<void>;
   onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
+  readFileContent?: (request: {
+    reviewId: string;
+    filePath: string;
+    startLine?: number;
+    endLine?: number;
+    contextLines?: number;
+  }) => Promise<{
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    total_lines: number;
+    content: string;
+  }>;
+  reviewId?: string;
   selection?: CodeSelection | null;
   threads?: ReviewThread[];
 } = {}) {
@@ -107,6 +133,8 @@ function renderVoiceSelectionDemo({
       onAsk={onAsk}
       onFollowUp={onFollowUp}
       onNavigateFile={onNavigateFile}
+      readFileContent={readFileContent}
+      reviewId={reviewId}
       selection={selection}
       threads={threads}
     />,
@@ -172,6 +200,30 @@ describe("VoiceSelectionDemo", () => {
     });
   });
 
+  it("summarizes changed line ranges from unified patches", () => {
+    const summaries = summarizeChangedLines([
+      {
+        path: "src/review/diagram.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 2,
+        patch: "@@ -10,4 +10,5 @@\n context\n-old one\n-old two\n+new one\n+new two\n+new three\n tail",
+      },
+    ]);
+
+    expect(summaries).toEqual([
+      {
+        filePath: "src/review/diagram.ts",
+        status: "modified",
+        patchAvailable: true,
+        addedRanges: [{ startLine: 11, endLine: 13 }],
+        deletedRanges: [{ startLine: 11, endLine: 12 }],
+        changedNewRanges: [{ startLine: 11, endLine: 13 }],
+      },
+    ]);
+    expect(formatChangedLineSummaries(summaries)).toBe("src/review/diagram.ts: added L11-L13; deleted L11-L12");
+  });
+
   it("configures the realtime voice component with the selected-text tool", () => {
     renderVoiceSelectionDemo();
 
@@ -196,6 +248,15 @@ describe("VoiceSelectionDemo", () => {
           }),
           expect.objectContaining({
             name: "get_review_room_context",
+          }),
+          expect.objectContaining({
+            name: "list_pr_files",
+          }),
+          expect.objectContaining({
+            name: "summarize_changed_lines",
+          }),
+          expect.objectContaining({
+            name: "read_pr_file_range",
           }),
           expect.objectContaining({
             name: "navigate_file",
@@ -280,6 +341,111 @@ describe("VoiceSelectionDemo", () => {
 
     expect(onFollowUp).toHaveBeenCalledWith("thr_issue", "What test would catch this?");
     expect(await screen.findByText("Follow-up started")).toBeInTheDocument();
+  });
+
+  it("lists PR files when the realtime tool executes", async () => {
+    const options = renderVoiceSelectionDemo();
+    const listPrFiles = options.tools.find((tool) => tool.name === "list_pr_files");
+    if (!listPrFiles) {
+      throw new Error("Expected list PR files voice tool");
+    }
+
+    const result = listPrFiles.execute({});
+
+    expect(result).toEqual({
+      ok: true,
+      files: [
+        {
+          path: "src/review/diagram.ts",
+          status: "modified",
+          additions: 12,
+          deletions: 2,
+          previousPath: null,
+          patchAvailable: true,
+        },
+        {
+          path: "docs/foo.txt",
+          status: "added",
+          additions: 3,
+          deletions: 0,
+          previousPath: null,
+          patchAvailable: true,
+        },
+      ],
+    });
+    expect(await screen.findByText("Changed files")).toBeInTheDocument();
+    expect(screen.getByText(/MODIFIED src\/review\/diagram\.ts \(\+12\/-2\)/)).toBeInTheDocument();
+  });
+
+  it("summarizes changed lines when the realtime tool executes", async () => {
+    const options = renderVoiceSelectionDemo({
+      files: [
+        {
+          path: "src/review/diagram.ts",
+          status: "modified",
+          additions: 2,
+          deletions: 1,
+          patch: "@@ -10,2 +10,3 @@\n-old\n+new\n+next",
+        },
+      ],
+    });
+    const summarizeChanged = options.tools.find((tool) => tool.name === "summarize_changed_lines");
+    if (!summarizeChanged) {
+      throw new Error("Expected changed-line summary voice tool");
+    }
+
+    const result = summarizeChanged.execute({ filePath: "diagram.ts" });
+
+    expect(result).toEqual({
+      ok: true,
+      summaries: [
+        {
+          filePath: "src/review/diagram.ts",
+          status: "modified",
+          patchAvailable: true,
+          addedRanges: [{ startLine: 10, endLine: 11 }],
+          deletedRanges: [{ startLine: 10, endLine: 10 }],
+          changedNewRanges: [{ startLine: 10, endLine: 11 }],
+        },
+      ],
+    });
+    expect(await screen.findByText("Changed lines")).toBeInTheDocument();
+    expect(screen.getByText("src/review/diagram.ts: added L10-L11; deleted L10")).toBeInTheDocument();
+  });
+
+  it("reads PR file ranges through the realtime tool", async () => {
+    const readFileContent = vi.fn(() =>
+      Promise.resolve({
+        file_path: "src/review/diagram.ts",
+        start_line: 200,
+        end_line: 203,
+        total_lines: 300,
+        content: "before\nconst total = items.length;\nafter",
+      }),
+    );
+    const options = renderVoiceSelectionDemo({ readFileContent });
+    const readPrFileRange = options.tools.find((tool) => tool.name === "read_pr_file_range");
+    if (!readPrFileRange) {
+      throw new Error("Expected read PR file range voice tool");
+    }
+
+    await readPrFileRange.execute({
+      filePath: "diagram.ts",
+      startLine: 201,
+      endLine: 202,
+      contextLines: 1,
+    });
+
+    expect(readFileContent).toHaveBeenCalledWith({
+      reviewId: "rev_acme_review_room_247",
+      filePath: "src/review/diagram.ts",
+      startLine: 201,
+      endLine: 202,
+      contextLines: 1,
+    });
+    expect(await screen.findByText("File content")).toBeInTheDocument();
+    expect(screen.getByText(/src\/review\/diagram\.ts:L200-L203/)).toBeInTheDocument();
+    expect(screen.getByText(/const total = items\.length;/)).toBeInTheDocument();
   });
 
   it("prompts for a focused thread when a follow-up target is ambiguous", async () => {

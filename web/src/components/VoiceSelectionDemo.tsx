@@ -7,7 +7,8 @@ import {
   type VoiceControlController,
 } from "realtime-voice-component";
 import { z } from "zod";
-import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
+import { getFileContent } from "../api";
+import type { ChangedFile, CodeSelection, FileContentResponse, ReviewThread } from "../types";
 
 type VoicePopup = {
   title: string;
@@ -31,6 +32,8 @@ export function VoiceSelectionDemo({
   onAsk,
   onFollowUp,
   onNavigateFile,
+  readFileContent = getFileContent,
+  reviewId,
   selection,
   threads,
 }: {
@@ -40,6 +43,8 @@ export function VoiceSelectionDemo({
   onAsk: (utterance: string) => Promise<void>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
+  readFileContent?: typeof getFileContent;
+  reviewId: string;
   selection: CodeSelection | null;
   threads: ReviewThread[];
 }) {
@@ -53,6 +58,8 @@ export function VoiceSelectionDemo({
   const onAskRef = useRef(onAsk);
   const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
+  const readFileContentRef = useRef(readFileContent);
+  const reviewIdRef = useRef(reviewId);
   const selectionRef = useRef<CodeSelection | null>(selection);
   const threadsRef = useRef<ReviewThread[]>(threads);
   const lastLoggedUserTranscriptRef = useRef<string | null>(null);
@@ -80,6 +87,14 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     onNavigateFileRef.current = onNavigateFile;
   }, [onNavigateFile]);
+
+  useEffect(() => {
+    readFileContentRef.current = readFileContent;
+  }, [readFileContent]);
+
+  useEffect(() => {
+    reviewIdRef.current = reviewId;
+  }, [reviewId]);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -155,6 +170,66 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
+        name: "list_pr_files",
+        description: "List the files changed in the pull request, including path, status, additions, deletions, and whether a patch is available.",
+        parameters: z.object({}),
+        execute: () => {
+          const files = filesRef.current.map((file) => ({
+            path: file.path,
+            status: file.status,
+            additions: file.additions,
+            deletions: file.deletions,
+            previousPath: file.previous_path ?? null,
+            patchAvailable: Boolean(file.patch),
+          }));
+          setPopup({ title: "Changed files", body: formatChangedFilesForPopup(filesRef.current) });
+          return { ok: true, files };
+        },
+      }),
+      defineVoiceTool({
+        name: "summarize_changed_lines",
+        description: "Summarize changed line ranges from the pull request patches. Use this before reading surrounding source text around changed lines.",
+        parameters: z.object({
+          filePath: z.string().optional().describe("Optional changed file path or basename to summarize. Omit to summarize all changed files."),
+        }),
+        execute: ({ filePath }) => {
+          const files = filePath ? resolveFilesForSummary(filePath, filesRef.current) : filesRef.current;
+          if (!Array.isArray(files)) {
+            setPopup({ title: "Changed lines", body: files.message });
+            return files;
+          }
+          const summaries = summarizeChangedLines(files);
+          setPopup({ title: "Changed lines", body: formatChangedLineSummaries(summaries) });
+          return { ok: true, summaries };
+        },
+      }),
+      defineVoiceTool({
+        name: "read_pr_file_range",
+        description: "Read text from a changed PR file by one-based line range, with optional surrounding context lines from the checked-out PR version.",
+        parameters: z.object({
+          filePath: z.string().min(1).describe("Changed file path or basename to read."),
+          startLine: z.number().int().positive().optional().describe("First one-based line to read. Omit with endLine to read the full file."),
+          endLine: z.number().int().positive().optional().describe("Last one-based line to read. Defaults to startLine when only startLine is provided."),
+          contextLines: z.number().int().min(0).optional().describe("Number of surrounding lines to include before and after the requested range."),
+        }),
+        execute: async ({ filePath, startLine, endLine, contextLines }) => {
+          const resolved = resolveFileNavigation({ action: "file", filePath }, filesRef.current, activeFileRef.current);
+          if (!resolved.ok) {
+            setPopup({ title: "Read file", body: resolved.message });
+            return resolved;
+          }
+          const content = await readFileContentRef.current({
+            reviewId: reviewIdRef.current,
+            filePath: resolved.filePath,
+            startLine,
+            endLine,
+            contextLines,
+          });
+          setPopup({ title: "File content", body: formatFileContentForPopup(content) });
+          return { ok: true, file: content };
+        },
+      }),
+      defineVoiceTool({
         name: "navigate_file",
         description: "Navigate the pull request diff to another changed file. Use action next for commands like 'show me the next file', previous for 'previous file', and file for commands like 'go to foo.txt'.",
         parameters: z.object({
@@ -181,7 +256,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onEvent: (event) => {
         logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
       },
@@ -378,6 +453,142 @@ export function resolveFileNavigation(
 
 function normalizeFileQuery(value: string | undefined) {
   return (value ?? "").trim().toLowerCase();
+}
+
+export type LineRange = {
+  startLine: number;
+  endLine: number;
+};
+
+export type ChangedLineSummary = {
+  filePath: string;
+  status: ChangedFile["status"];
+  patchAvailable: boolean;
+  addedRanges: LineRange[];
+  deletedRanges: LineRange[];
+  changedNewRanges: LineRange[];
+};
+
+const HUNK_RE = /^@@ -(?<oldStart>\d+)(?:,\d+)? \+(?<newStart>\d+)(?:,\d+)? @@/;
+
+export function summarizeChangedLines(files: ChangedFile[]): ChangedLineSummary[] {
+  return files.map((file) => {
+    if (!file.patch) {
+      return {
+        filePath: file.path,
+        status: file.status,
+        patchAvailable: false,
+        addedRanges: [],
+        deletedRanges: [],
+        changedNewRanges: [],
+      };
+    }
+
+    const addedLines: number[] = [];
+    const deletedLines: number[] = [];
+    let oldLine = 0;
+    let newLine = 0;
+
+    for (const raw of file.patch.split("\n")) {
+      const hunkMatch = HUNK_RE.exec(raw);
+      if (hunkMatch?.groups) {
+        oldLine = Number(hunkMatch.groups.oldStart);
+        newLine = Number(hunkMatch.groups.newStart);
+        continue;
+      }
+      if (raw.startsWith("+")) {
+        addedLines.push(newLine);
+        newLine += 1;
+        continue;
+      }
+      if (raw.startsWith("-")) {
+        deletedLines.push(oldLine);
+        oldLine += 1;
+        continue;
+      }
+      if (raw.startsWith(" ")) {
+        oldLine += 1;
+        newLine += 1;
+      }
+    }
+
+    const addedRanges = compactLineRanges(addedLines);
+    return {
+      filePath: file.path,
+      status: file.status,
+      patchAvailable: true,
+      addedRanges,
+      deletedRanges: compactLineRanges(deletedLines),
+      changedNewRanges: addedRanges,
+    };
+  });
+}
+
+function compactLineRanges(lines: number[]): LineRange[] {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b);
+  const ranges: LineRange[] = [];
+  for (const line of sorted) {
+    const last = ranges.at(-1);
+    if (last && last.endLine + 1 === line) {
+      last.endLine = line;
+    } else {
+      ranges.push({ startLine: line, endLine: line });
+    }
+  }
+  return ranges;
+}
+
+function resolveFilesForSummary(filePath: string, files: ChangedFile[]): ChangedFile[] | { ok: false; message: string } {
+  const resolved = resolveFileNavigation({ action: "file", filePath }, files, null);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  return files.filter((file) => file.path === resolved.filePath);
+}
+
+function formatChangedFilesForPopup(files: ChangedFile[]) {
+  if (files.length === 0) {
+    return "No changed files are loaded.";
+  }
+  return files
+    .map((file) => {
+      const previous = file.previous_path ? ` from ${file.previous_path}` : "";
+      return `${file.status.toUpperCase()} ${file.path}${previous} (+${file.additions}/-${file.deletions})`;
+    })
+    .join("\n");
+}
+
+export function formatChangedLineSummaries(summaries: ChangedLineSummary[]) {
+  if (summaries.length === 0) {
+    return "No changed files are loaded.";
+  }
+  return summaries
+    .map((summary) => {
+      if (!summary.patchAvailable) {
+        return `${summary.filePath}: no text patch available`;
+      }
+      const added = formatRanges(summary.addedRanges);
+      const deleted = formatRanges(summary.deletedRanges);
+      return `${summary.filePath}: added ${added}; deleted ${deleted}`;
+    })
+    .join("\n");
+}
+
+function formatRanges(ranges: LineRange[]) {
+  if (ranges.length === 0) {
+    return "none";
+  }
+  return ranges
+    .map((range) => (range.startLine === range.endLine ? `L${range.startLine}` : `L${range.startLine}-L${range.endLine}`))
+    .join(", ");
+}
+
+function formatFileContentForPopup(content: FileContentResponse) {
+  const location =
+    content.start_line === content.end_line
+      ? `${content.file_path}:L${content.start_line}`
+      : `${content.file_path}:L${content.start_line}-L${content.end_line}`;
+  return `${location} of ${content.total_lines} lines\n\n${content.content}`;
 }
 
 type TranscriptEvent = {
