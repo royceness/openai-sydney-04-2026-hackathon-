@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from review_room.models import ChangedFile, PullRequestInfo
+from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
 
 
 PR_URL_RE = re.compile(
@@ -100,6 +100,27 @@ class GitHubClient:
 
         return map_pull_request(parsed, pr_data), files
 
+    async def create_pull_request_review_comment(
+        self,
+        pr: PullRequestInfo,
+        comment: PublishCommentRequest,
+    ) -> PublishedComment:
+        headers = await self._headers()
+        payload = build_review_comment_payload(pr, comment)
+        url = f"https://api.github.com/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}/comments"
+        async with httpx.AsyncClient(headers=headers, timeout=30.0, follow_redirects=True) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code >= 400:
+                raise GitHubError(f"GitHub PR comment request failed with HTTP {response.status_code}: {response.text}")
+            data = response.json()
+
+        return PublishedComment(
+            id=comment.id,
+            body=comment.body,
+            context=comment.context,
+            github_comment_url=data["html_url"],
+        )
+
 
 def map_pull_request(parsed: ParsedPullRequestUrl, data: dict) -> PullRequestInfo:
     return PullRequestInfo(
@@ -127,3 +148,23 @@ def map_changed_file(data: dict) -> ChangedFile:
         previous_path=data.get("previous_filename"),
     )
 
+
+def build_review_comment_payload(pr: PullRequestInfo, comment: PublishCommentRequest) -> dict[str, object]:
+    context = comment.context
+    if context.start_line is None or context.end_line is None:
+        raise ValueError("Published PR comments require selected line numbers")
+
+    start_line = min(context.start_line, context.end_line)
+    end_line = max(context.start_line, context.end_line)
+    side = "RIGHT" if context.side == "new" else "LEFT"
+    payload: dict[str, object] = {
+        "body": comment.body,
+        "commit_id": context.commit_sha or pr.head_sha,
+        "path": context.file_path,
+        "line": end_line,
+        "side": side,
+    }
+    if start_line != end_line:
+        payload["start_line"] = start_line
+        payload["start_side"] = side
+    return payload

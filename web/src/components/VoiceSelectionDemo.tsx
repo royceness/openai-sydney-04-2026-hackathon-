@@ -15,9 +15,9 @@ type VoicePopup = {
   body: string;
 };
 
-type DraftCommentResult = { status: "created" | "selection-required" | "empty" };
-type EditCommentResult = { status: "updated" | "not-found" | "empty" };
-type DeleteCommentResult = { status: "deleted" | "not-found" };
+type DraftCommentResult = { status: "created" | "selection-required" | "empty" | "failed"; message?: string };
+type EditCommentResult = { status: "updated" | "not-found" | "empty" | "failed"; message?: string };
+type DeleteCommentResult = { status: "deleted" | "not-found" | "failed"; message?: string };
 
 type FileNavigationRequest =
   | {
@@ -56,9 +56,9 @@ export function VoiceSelectionDemo({
   comments: DraftComment[];
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
-  onDeleteComment: (commentId: string) => DeleteCommentResult;
-  onDraftComment: (body: string) => DraftCommentResult;
-  onEditComment: (commentId: string, body: string) => EditCommentResult;
+  onDeleteComment: (commentId: string) => Promise<DeleteCommentResult>;
+  onDraftComment: (body: string) => Promise<DraftCommentResult>;
+  onEditComment: (commentId: string, body: string) => Promise<EditCommentResult>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   onNavigateThread: (threadId: string) => void;
@@ -280,8 +280,8 @@ export function VoiceSelectionDemo({
         parameters: z.object({
           comment: z.string().describe("The exact PR review comment body to draft."),
         }),
-        execute: ({ comment }) => {
-          const result = onDraftCommentRef.current(comment);
+        execute: async ({ comment }) => {
+          const result = await onDraftCommentRef.current(comment);
           if (result.status === "created") {
             const text = selectedLocationMessage(selectionRef.current);
             setPopup({ title: "PR comment drafted", body: text });
@@ -290,6 +290,10 @@ export function VoiceSelectionDemo({
           if (result.status === "selection-required") {
             setPopup({ title: "Select lines", body: "Select lines in the diff to attach this PR comment." });
             return { ok: true, status: "selection-required" };
+          }
+          if (result.status === "failed") {
+            setPopup({ title: "PR comment", body: result.message ?? "Failed to draft PR comment." });
+            return { ok: false, status: "failed" };
           }
           setPopup({ title: "PR comment", body: "No comment text was provided." });
           return { ok: false, status: "empty" };
@@ -312,8 +316,8 @@ export function VoiceSelectionDemo({
           commentId: z.string().min(1).describe("The local draft PR comment id to edit."),
           comment: z.string().describe("The replacement PR review comment body."),
         }),
-        execute: ({ commentId, comment }) => {
-          const result = onEditCommentRef.current(commentId, comment);
+        execute: async ({ commentId, comment }) => {
+          const result = await onEditCommentRef.current(commentId, comment);
           if (result.status === "updated") {
             setPopup({ title: "PR comment updated", body: `Updated ${commentId}.` });
             return { ok: true, status: "updated", commentId };
@@ -321,6 +325,10 @@ export function VoiceSelectionDemo({
           if (result.status === "empty") {
             setPopup({ title: "PR comment", body: "No replacement comment text was provided." });
             return { ok: false, status: "empty", commentId };
+          }
+          if (result.status === "failed") {
+            setPopup({ title: "PR comment", body: result.message ?? "Failed to update draft comment." });
+            return { ok: false, status: "failed", commentId };
           }
           setPopup({ title: "PR comment", body: `No draft comment matches ${commentId}.` });
           return { ok: false, status: "not-found", commentId };
@@ -332,11 +340,15 @@ export function VoiceSelectionDemo({
         parameters: z.object({
           commentId: z.string().min(1).describe("The local draft PR comment id to delete."),
         }),
-        execute: ({ commentId }) => {
-          const result = onDeleteCommentRef.current(commentId);
+        execute: async ({ commentId }) => {
+          const result = await onDeleteCommentRef.current(commentId);
           if (result.status === "deleted") {
             setPopup({ title: "PR comment deleted", body: `Deleted ${commentId}.` });
             return { ok: true, status: "deleted", commentId };
+          }
+          if (result.status === "failed") {
+            setPopup({ title: "PR comment", body: result.message ?? "Failed to delete draft comment." });
+            return { ok: false, status: "failed", commentId };
           }
           setPopup({ title: "PR comment", body: `No draft comment matches ${commentId}.` });
           return { ok: false, status: "not-found", commentId };

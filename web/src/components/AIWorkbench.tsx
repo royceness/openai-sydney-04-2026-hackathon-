@@ -11,6 +11,7 @@ type ThreadNavigationRequest = {
 export function AIWorkbench({
   activeThreadId,
   comments,
+  commentError,
   pendingCommentBody,
   threads,
   selection,
@@ -20,28 +21,34 @@ export function AIWorkbench({
   onDeleteComment,
   onNavigateReference,
   onFollowUp,
+  onPublishComments,
   threadNavigationRequest,
 }: {
   activeThreadId: string | null;
   comments: DraftComment[];
+  commentError: string | null;
   pendingCommentBody: string | null;
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
   onActivateThread: (threadId: string) => void;
   onAsk: (utterance: string) => Promise<void>;
-  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
+  onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
+  onPublishComments: () => Promise<void>;
   threadNavigationRequest: ThreadNavigationRequest | null;
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(true);
   const [flashedThreadId, setFlashedThreadId] = useState<string | null>(null);
+  const [publishingComments, setPublishingComments] = useState(false);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
   const threadElementRefs = useRef(new Map<string, HTMLElement>());
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
+  const publishableCommentCount = comments.filter((comment) => comment.status === "draft" || comment.status === "failed").length;
+  const hasPublishingComment = comments.some((comment) => comment.status === "publishing");
 
   useEffect(() => {
     const newThreadIds = threads.map((thread) => thread.id).filter((threadId) => !knownThreadIdsRef.current.has(threadId));
@@ -126,6 +133,28 @@ export function AIWorkbench({
 
           {commentsOpen ? (
             <div className="space-y-3 px-4 pb-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-500">
+                  {publishableCommentCount > 0
+                    ? `${publishableCommentCount} ready to publish`
+                    : comments.length > 0
+                      ? "No unpublished drafts"
+                      : "No comments drafted"}
+                </div>
+                <button
+                  className="inline-flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={publishableCommentCount === 0 || publishingComments || hasPublishingComment}
+                  onClick={() => {
+                    setPublishingComments(true);
+                    void onPublishComments().finally(() => setPublishingComments(false));
+                  }}
+                  type="button"
+                >
+                  <UploadIcon />
+                  {publishingComments || hasPublishingComment ? "Publishing" : "Publish"}
+                </button>
+              </div>
+              {commentError ? <div className="rounded-md border border-rose-900/70 bg-rose-950/30 p-3 text-sm text-rose-100">{commentError}</div> : null}
               {pendingCommentBody ? (
                 <div className="rounded-md border border-amber-700/50 bg-amber-950/20 p-3 text-sm text-amber-100">
                   <div className="font-semibold">Select lines to attach this comment</div>
@@ -142,21 +171,35 @@ export function AIWorkbench({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 truncate text-xs font-semibold text-violet-200">{formatCommentLocation(comment.context)}</div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{comment.status}</span>
-                      <button
-                        aria-label={`Delete draft comment at ${formatCommentLocation(comment.context)}`}
-                        className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
-                        onClick={() => onDeleteComment(comment.id)}
-                        title="Delete draft comment"
-                        type="button"
-                      >
-                        <TrashIcon />
-                      </button>
+                      <span className={commentStatusClass(comment.status)}>{comment.status}</span>
+                      {comment.status === "published" && comment.github_comment_url ? (
+                        <a
+                          className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-violet-400 hover:text-violet-100"
+                          href={comment.github_comment_url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          GitHub
+                        </a>
+                      ) : null}
+                      {comment.status !== "published" ? (
+                        <button
+                          aria-label={`Delete draft comment at ${formatCommentLocation(comment.context)}`}
+                          className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={comment.status === "publishing"}
+                          onClick={() => void onDeleteComment(comment.id)}
+                          title="Delete draft comment"
+                          type="button"
+                        >
+                          <TrashIcon />
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                   <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200" data-comment-id={comment.id}>
                     {comment.body}
                   </div>
+                  {comment.error ? <div className="mt-2 text-xs text-rose-300">{comment.error}</div> : null}
                 </div>
               ))}
             </div>
@@ -397,6 +440,19 @@ function statusClass(status: ReviewThread["status"]) {
   return `${base} bg-amber-500/10 text-amber-300`;
 }
 
+function commentStatusClass(status: DraftComment["status"]) {
+  if (status === "published") {
+    return "rounded bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200";
+  }
+  if (status === "failed") {
+    return "rounded bg-rose-500/10 px-2 py-1 text-xs text-rose-200";
+  }
+  if (status === "publishing") {
+    return "rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-200";
+  }
+  return "rounded bg-slate-800 px-2 py-1 text-xs text-slate-300";
+}
+
 function formatCommentLocation(selection: CodeSelection) {
   const start = selection.startLine;
   const end = selection.endLine;
@@ -414,6 +470,16 @@ function TrashIcon() {
       <path d="M6 6l1 15h10l1-15" />
       <path d="M10 11v6" />
       <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+      <path d="M12 16V4" strokeLinecap="round" />
+      <path d="m7 9 5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 20h14" strokeLinecap="round" />
     </svg>
   );
 }

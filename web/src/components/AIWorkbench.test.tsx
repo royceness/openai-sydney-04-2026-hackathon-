@@ -17,11 +17,13 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
     <AIWorkbench
       activeThreadId={null}
       comments={[]}
+      commentError={null}
       onActivateThread={vi.fn()}
       onAsk={vi.fn()}
       onDeleteComment={vi.fn()}
       onFollowUp={vi.fn()}
       onNavigateReference={vi.fn()}
+      onPublishComments={vi.fn()}
       pendingCommentBody={null}
       selection={null}
       threadError={null}
@@ -73,7 +75,8 @@ describe("AIWorkbench", () => {
   });
 
   it("renders and deletes local PR comment drafts", async () => {
-    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    const onDeleteComment = vi.fn(() => Promise.resolve({ status: "deleted" as const }));
+    const onPublishComments = vi.fn(() => Promise.resolve());
     renderWorkbench({
       comments: [
         {
@@ -91,6 +94,7 @@ describe("AIWorkbench", () => {
         },
       ],
       onDeleteComment,
+      onPublishComments,
       pendingCommentBody: "add null input coverage",
     });
 
@@ -100,9 +104,65 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("README:L1")).toBeInTheDocument();
     expect(screen.getByText("this needs tests")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: /Publish/ }));
+    expect(onPublishComments).toHaveBeenCalledTimes(1);
+
     await userEvent.click(screen.getByRole("button", { name: "Delete draft comment at README:L1" }));
 
     expect(onDeleteComment).toHaveBeenCalledWith("draft_1");
+  });
+
+  it("renders published PR comments with GitHub links", () => {
+    renderWorkbench({
+      comments: [
+        {
+          id: "draft_1",
+          body: "published comment",
+          status: "published",
+          created_at: "2026-04-29T00:00:00Z",
+          github_comment_url: "https://github.com/acme/review-room/pull/247#discussion_r1",
+          context: {
+            filePath: "README",
+            side: "new",
+            startLine: 1,
+            endLine: 1,
+            selectedText: "",
+          },
+        },
+      ],
+    });
+
+    expect(screen.getByRole("button", { name: /Publish/ })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/review-room/pull/247#discussion_r1",
+    );
+    expect(screen.queryByRole("button", { name: "Delete draft comment at README:L1" })).not.toBeInTheDocument();
+  });
+
+  it("shows PR comment publish errors", () => {
+    renderWorkbench({
+      commentError: "GitHub PR comment request failed",
+      comments: [
+        {
+          id: "draft_1",
+          body: "this needs tests",
+          status: "failed",
+          error: "GitHub PR comment request failed",
+          created_at: "2026-04-29T00:00:00Z",
+          context: {
+            filePath: "README",
+            side: "new",
+            startLine: 1,
+            endLine: 1,
+            selectedText: "",
+          },
+        },
+      ],
+    });
+
+    expect(screen.getAllByText("GitHub PR comment request failed")).toHaveLength(2);
+    expect(screen.getByText("failed")).toBeInTheDocument();
   });
 
   it("collapses and reopens thread output", async () => {
@@ -160,11 +220,13 @@ describe("AIWorkbench", () => {
       <AIWorkbench
         activeThreadId={null}
         comments={[]}
+        commentError={null}
         onActivateThread={vi.fn()}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
+        onPublishComments={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         threadError={null}
@@ -247,11 +309,13 @@ describe("AIWorkbench", () => {
       <AIWorkbench
         activeThreadId="thr_1"
         comments={[]}
+        commentError={null}
         onActivateThread={onActivateThread}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
         onFollowUp={onFollowUp}
         onNavigateReference={vi.fn()}
+        onPublishComments={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         threadError={null}
@@ -301,12 +365,14 @@ describe("AIWorkbench", () => {
     rerender(
       <AIWorkbench
         activeThreadId={null}
+        commentError={null}
         comments={[]}
         onActivateThread={onActivateThread}
         onAsk={vi.fn()}
         onDeleteComment={vi.fn()}
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
+        onPublishComments={vi.fn()}
         pendingCommentBody={null}
         selection={null}
         threadError={null}

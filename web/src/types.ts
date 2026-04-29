@@ -52,6 +52,7 @@ export type CreateReviewResponse = {
   pr: PullRequestInfo;
   files: ChangedFile[];
   threads: ReviewThread[];
+  comments: DraftComment[];
 };
 
 export type FileDiffResponse = {
@@ -91,8 +92,27 @@ export type DraftComment = {
   id: string;
   body: string;
   context: CodeSelection;
-  status: "draft";
+  status: "draft" | "publishing" | "published" | "failed";
   created_at: string;
+  github_comment_url?: string | null;
+  error?: string | null;
+};
+
+export type PublishCommentsResponse = {
+  comments: PublishedComment[];
+};
+
+export type PublishedComment = {
+  id: string;
+  body: string;
+  context: CodeSelection;
+  status: "published";
+  github_comment_url: string;
+};
+
+export type DeleteCommentResponse = {
+  comment_id: string;
+  status: "deleted";
 };
 
 export type CodeReference = {

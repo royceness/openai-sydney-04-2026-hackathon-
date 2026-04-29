@@ -106,9 +106,9 @@ function renderVoiceSelectionDemo({
   comments = draftComments,
   files = changedFiles,
   onAsk = vi.fn(() => Promise.resolve()),
-  onDeleteComment = vi.fn(() => ({ status: "deleted" as const })),
-  onDraftComment = vi.fn(() => ({ status: "created" as const })),
-  onEditComment = vi.fn(() => ({ status: "updated" as const })),
+  onDeleteComment = vi.fn(() => Promise.resolve({ status: "deleted" as const })),
+  onDraftComment = vi.fn(() => Promise.resolve({ status: "created" as const })),
+  onEditComment = vi.fn(() => Promise.resolve({ status: "updated" as const })),
   onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
   onNavigateThread = vi.fn(),
@@ -130,9 +130,12 @@ function renderVoiceSelectionDemo({
   comments?: DraftComment[];
   files?: ChangedFile[];
   onAsk?: (utterance: string) => Promise<void>;
-  onDeleteComment?: (commentId: string) => { status: "deleted" | "not-found" };
-  onDraftComment?: (body: string) => { status: "created" | "selection-required" | "empty" };
-  onEditComment?: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
+  onDeleteComment?: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
+  onDraftComment?: (body: string) => Promise<{ status: "created" | "selection-required" | "empty" | "failed"; message?: string }>;
+  onEditComment?: (
+    commentId: string,
+    body: string,
+  ) => Promise<{ status: "updated" | "not-found" | "empty" | "failed"; message?: string }>;
   onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
   onNavigateThread?: (threadId: string) => void;
@@ -508,8 +511,8 @@ describe("VoiceSelectionDemo", () => {
   });
 
   it("lists, edits, and deletes PR comments by id when realtime tools execute", async () => {
-    const onEditComment = vi.fn(() => ({ status: "updated" as const }));
-    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    const onEditComment = vi.fn(() => Promise.resolve({ status: "updated" as const }));
+    const onDeleteComment = vi.fn(() => Promise.resolve({ status: "deleted" as const }));
     const options = renderVoiceSelectionDemo({ onDeleteComment, onEditComment });
     const listPrComments = options.tools.find((tool) => tool.name === "list_pr_comments");
     const editPrComment = options.tools.find((tool) => tool.name === "edit_pr_comment");
@@ -536,7 +539,7 @@ describe("VoiceSelectionDemo", () => {
     expect(await screen.findByText("PR comments")).toBeInTheDocument();
     expect(screen.getByText(/draft_1 - src\/review\/diagram\.ts:L201-L202/)).toBeInTheDocument();
 
-    expect(editPrComment.execute({ commentId: "draft_1", comment: "Ask for Hebrew instead." })).toEqual({
+    await expect(editPrComment.execute({ commentId: "draft_1", comment: "Ask for Hebrew instead." })).resolves.toEqual({
       ok: true,
       status: "updated",
       commentId: "draft_1",
@@ -545,7 +548,7 @@ describe("VoiceSelectionDemo", () => {
     expect(onEditComment).toHaveBeenCalledWith("draft_1", "Ask for Hebrew instead.");
     expect(await screen.findByText("PR comment updated")).toBeInTheDocument();
 
-    expect(deletePrComment.execute({ commentId: "draft_1" })).toEqual({
+    await expect(deletePrComment.execute({ commentId: "draft_1" })).resolves.toEqual({
       ok: true,
       status: "deleted",
       commentId: "draft_1",
