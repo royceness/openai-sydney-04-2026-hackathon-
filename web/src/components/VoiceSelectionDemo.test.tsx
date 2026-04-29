@@ -39,6 +39,7 @@ const controller = {
   connected: false,
   destroy: vi.fn(),
   disconnect: vi.fn(),
+  sendClientEvent: vi.fn(),
   status: "idle",
 };
 const createVoiceControlController = vi.fn((options: VoiceControllerOptions) => {
@@ -123,6 +124,7 @@ function renderVoiceSelectionDemo({
   ),
   reviewId = "rev_acme_review_room_247",
   selection = selectedCode,
+  threadStatusAnnouncement = null,
   threads = [completedThread],
 }: {
   activeFile?: string | null;
@@ -154,6 +156,11 @@ function renderVoiceSelectionDemo({
   }>;
   reviewId?: string;
   selection?: CodeSelection | null;
+  threadStatusAnnouncement?: {
+    requestId: number;
+    threadId: string;
+    text: string;
+  } | null;
   threads?: ReviewThread[];
 } = {}) {
   render(
@@ -172,6 +179,7 @@ function renderVoiceSelectionDemo({
       readFileContent={readFileContent}
       reviewId={reviewId}
       selection={selection}
+      threadStatusAnnouncement={threadStatusAnnouncement}
       threads={threads}
     />,
   );
@@ -187,6 +195,7 @@ describe("VoiceSelectionDemo", () => {
     cleanup();
     vi.clearAllMocks();
     controller.connected = false;
+    controller.sendClientEvent.mockClear();
     controller.status = "idle";
   });
 
@@ -746,6 +755,39 @@ describe("VoiceSelectionDemo", () => {
 
     expect(onNavigateThread).toHaveBeenCalledWith("thr_issue");
     expect(await screen.findByText("Showing Found issue")).toBeInTheDocument();
+  });
+
+  it("speaks thread status announcements only when voice is connected and ready", () => {
+    controller.connected = true;
+    controller.status = "ready";
+
+    renderVoiceSelectionDemo({
+      threadStatusAnnouncement: {
+        requestId: 1,
+        threadId: "thr_issue",
+        text: 'The thread "Found issue" is complete.',
+      },
+    });
+
+    expect(controller.sendClientEvent).toHaveBeenCalledWith({
+      type: "response.create",
+      response: {
+        instructions: 'Say exactly this brief status update and nothing else: "The thread \\"Found issue\\" is complete."',
+        modalities: ["audio"],
+      },
+    });
+  });
+
+  it("does not speak thread status announcements when voice is off", () => {
+    renderVoiceSelectionDemo({
+      threadStatusAnnouncement: {
+        requestId: 1,
+        threadId: "thr_issue",
+        text: 'The thread "Found issue" is complete.',
+      },
+    });
+
+    expect(controller.sendClientEvent).not.toHaveBeenCalled();
   });
 
   it("prompts for a focused thread when a follow-up target is ambiguous", async () => {

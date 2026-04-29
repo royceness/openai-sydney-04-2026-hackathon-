@@ -8,6 +8,7 @@ import {
 } from "realtime-voice-component";
 import { z } from "zod";
 import { getFileContent } from "../api";
+import type { ThreadStatusAnnouncement } from "../App";
 import type { ChangedFile, CodeSelection, DraftComment, FileContentResponse, ReviewThread } from "../types";
 
 type VoicePopup = {
@@ -49,6 +50,7 @@ export function VoiceSelectionDemo({
   readFileContent = getFileContent,
   reviewId,
   selection,
+  threadStatusAnnouncement,
   threads,
 }: {
   activeFile: string | null;
@@ -65,6 +67,7 @@ export function VoiceSelectionDemo({
   readFileContent?: typeof getFileContent;
   reviewId: string;
   selection: CodeSelection | null;
+  threadStatusAnnouncement: ThreadStatusAnnouncement | null;
   threads: ReviewThread[];
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +89,7 @@ export function VoiceSelectionDemo({
   const reviewIdRef = useRef(reviewId);
   const selectionRef = useRef<CodeSelection | null>(selection);
   const threadsRef = useRef<ReviewThread[]>(threads);
+  const spokenAnnouncementIdsRef = useRef(new Set<number>());
   const lastLoggedAssistantSpeechRef = useRef<string | null>(null);
   const lastLoggedUserTranscriptRef = useRef<string | null>(null);
 
@@ -481,6 +485,23 @@ export function VoiceSelectionDemo({
   const isActive = effectiveStatus === "connecting" || effectiveStatus === "ready" || effectiveStatus === "listening";
   const buttonLabel = voiceButtonLabel(effectiveStatus);
 
+  useEffect(() => {
+    if (!threadStatusAnnouncement) {
+      return;
+    }
+    if (spokenAnnouncementIdsRef.current.has(threadStatusAnnouncement.requestId)) {
+      return;
+    }
+    if (!runtime.connected || !isVoiceReadyForAnnouncement(effectiveStatus)) {
+      if (!runtime.connected && effectiveStatus === "idle") {
+        spokenAnnouncementIdsRef.current.add(threadStatusAnnouncement.requestId);
+      }
+      return;
+    }
+    spokenAnnouncementIdsRef.current.add(threadStatusAnnouncement.requestId);
+    speakAnnouncement(runtime, threadStatusAnnouncement.text);
+  }, [effectiveStatus, runtime, threadStatusAnnouncement]);
+
   const toggleVoice = useCallback(() => {
     const now = Date.now();
     if (now - lastToggleAtRef.current < 250) {
@@ -559,6 +580,20 @@ export function VoiceSelectionDemo({
       ) : null}
     </div>
   );
+}
+
+function isVoiceReadyForAnnouncement(status: ReturnType<typeof useVoiceControl>["status"] | "connecting") {
+  return status === "ready" || status === "listening";
+}
+
+function speakAnnouncement(runtime: ReturnType<typeof useVoiceControl>, text: string) {
+  runtime.sendClientEvent({
+    type: "response.create",
+    response: {
+      instructions: `Say exactly this brief status update and nothing else: ${JSON.stringify(text)}`,
+      modalities: ["audio"],
+    },
+  });
 }
 
 function voiceButtonLabel(status: ReturnType<typeof useVoiceControl>["status"] | "connecting") {

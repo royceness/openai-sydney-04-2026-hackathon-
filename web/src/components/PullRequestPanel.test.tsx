@@ -32,6 +32,7 @@ describe("PullRequestPanel", () => {
         onNavigateThread={() => undefined}
         reviewId="rev_acme_review_room_247"
         selection={null}
+        threadStatusAnnouncement={null}
         threads={[]}
       />,
     );

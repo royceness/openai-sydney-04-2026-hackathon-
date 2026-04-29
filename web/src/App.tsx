@@ -31,6 +31,12 @@ export type ThreadNavigationRequest = {
   requestId: number;
 };
 
+export type ThreadStatusAnnouncement = {
+  requestId: number;
+  threadId: string;
+  text: string;
+};
+
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>("booting");
   const [error, setError] = useState<string | null>(null);
@@ -43,11 +49,13 @@ export default function App() {
   const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadNavigationRequest, setThreadNavigationRequest] = useState<ThreadNavigationRequest | null>(null);
+  const [threadStatusAnnouncement, setThreadStatusAnnouncement] = useState<ThreadStatusAnnouncement | null>(null);
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const [commentError, setCommentError] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
   const commentsRef = useRef<DraftComment[]>([]);
+  const previousThreadStatusesRef = useRef<Map<string, ReviewThread["status"]>>(new Map());
 
   const loadReview = useCallback(async (prUrl: string) => {
     setLoadState("loading");
@@ -56,6 +64,8 @@ export default function App() {
     setTargetReference(null);
     setActiveThreadId(null);
     setThreadNavigationRequest(null);
+    setThreadStatusAnnouncement(null);
+    previousThreadStatusesRef.current = new Map();
     setComments([]);
     setPendingCommentBody(null);
     setCommentError(null);
@@ -134,6 +144,7 @@ export default function App() {
   useEffect(() => {
     if (!review) {
       reviewContextRef.current = null;
+      previousThreadStatusesRef.current = new Map();
       return;
     }
     reviewContextRef.current = {
@@ -143,6 +154,18 @@ export default function App() {
       selection: selection ?? undefined,
     };
   }, [activeFile, review, selection]);
+
+  useEffect(() => {
+    if (!review) {
+      return;
+    }
+
+    const announcement = nextThreadStatusAnnouncement(review.threads, previousThreadStatusesRef.current);
+    previousThreadStatusesRef.current = new Map(review.threads.map((thread) => [thread.id, thread.status]));
+    if (announcement) {
+      setThreadStatusAnnouncement(announcement);
+    }
+  }, [review]);
 
   const addDraftComment = useCallback(async (body: string, context: CodeSelection) => {
     const reviewContext = reviewContextRef.current;
@@ -419,6 +442,7 @@ export default function App() {
           pr={review.pr}
           reviewId={review.reviewId}
           selection={selection}
+          threadStatusAnnouncement={threadStatusAnnouncement}
           threads={review.threads}
         />
         <DiffPane
@@ -448,6 +472,39 @@ export default function App() {
       />
     </div>
   );
+}
+
+export function nextThreadStatusAnnouncement(
+  threads: ReviewThread[],
+  previousStatuses: Map<string, ReviewThread["status"]>,
+): ThreadStatusAnnouncement | null {
+  const changedThread = threads.find((thread) => {
+    const previous = previousStatuses.get(thread.id);
+    return previous !== undefined && isInProgressStatus(previous) && isTerminalStatus(thread.status);
+  });
+  if (!changedThread) {
+    return null;
+  }
+  return {
+    requestId: Date.now(),
+    threadId: changedThread.id,
+    text: threadStatusAnnouncementText(changedThread),
+  };
+}
+
+function isInProgressStatus(status: ReviewThread["status"]) {
+  return status === "queued" || status === "running";
+}
+
+function isTerminalStatus(status: ReviewThread["status"]) {
+  return status === "complete" || status === "failed";
+}
+
+function threadStatusAnnouncementText(thread: ReviewThread) {
+  if (thread.status === "complete") {
+    return `The thread "${thread.title}" is complete.`;
+  }
+  return `The thread "${thread.title}" failed.`;
 }
 
 function LoadingScreen({ label }: { label: string }) {
