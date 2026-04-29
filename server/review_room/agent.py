@@ -30,58 +30,53 @@ class CodexAppServerAgent:
 
     def __init__(self, command: str | None = None) -> None:
         self.command = command or os.environ.get("REVIEW_ROOM_CODEX_COMMAND", "codex")
+        self._proc: asyncio.subprocess.Process | None = None
+        self._next_id = 1
+        self._lock = asyncio.Lock()
 
     async def run_thread(self, repo_path: str, title: str, prompt: str) -> AgentResult:
         repo = Path(repo_path)
         if not repo.exists():
             raise AgentError(f"Repo path does not exist: {repo_path}")
 
-        proc = await asyncio.create_subprocess_exec(
+        async with self._lock:
+            await self._ensure_started()
+            thread_response = await self._request("thread/start", self._thread_start_params(str(repo)))
+            codex_thread_id = thread_response["result"]["thread"]["id"]
+
+            await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
+            markdown = await self._collect_turn(codex_thread_id)
+            return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+
+    async def close(self) -> None:
+        await self._terminate()
+
+    async def _ensure_started(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            return
+
+        self._proc = await asyncio.create_subprocess_exec(
             self.command,
             "app-server",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            await self._send(
-                proc,
-                {
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "clientInfo": {"name": "review-room", "version": "0.1.0"},
-                        "capabilities": {"experimentalApi": True},
-                    },
-                },
-            )
-            await self._response(proc, 1)
+        self._next_id = 1
+        await self._request(
+            "initialize",
+            {
+                "clientInfo": {"name": "review-room", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
 
-            await self._send(
-                proc,
-                {
-                    "id": 2,
-                    "method": "thread/start",
-                    "params": self._thread_start_params(str(repo)),
-                },
-            )
-            thread_response = await self._response(proc, 2)
-            codex_thread_id = thread_response["result"]["thread"]["id"]
-
-            await self._send(
-                proc,
-                {
-                    "id": 3,
-                    "method": "turn/start",
-                    "params": self._turn_start_params(codex_thread_id, str(repo), prompt),
-                },
-            )
-            await self._response(proc, 3)
-
-            markdown = await self._collect_turn(proc, codex_thread_id)
-            return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
-        finally:
-            await self._terminate(proc)
+    async def _request(self, method: str, params: dict) -> dict:
+        proc = self._active_proc()
+        request_id = self._next_id
+        self._next_id += 1
+        await self._send({"id": request_id, "method": method, "params": params})
+        return await self._response(request_id)
 
     def _thread_start_params(self, repo_path: str) -> dict:
         return {
@@ -105,25 +100,26 @@ class CodexAppServerAgent:
             "input": [{"type": "text", "text": prompt, "text_elements": []}],
         }
 
-    async def _send(self, proc: asyncio.subprocess.Process, message: dict) -> None:
+    async def _send(self, message: dict) -> None:
+        proc = self._active_proc()
         if proc.stdin is None:
             raise AgentError("Codex app-server stdin is unavailable")
         proc.stdin.write((json.dumps(message) + "\n").encode())
         await proc.stdin.drain()
 
-    async def _response(self, proc: asyncio.subprocess.Process, request_id: int) -> dict:
+    async def _response(self, request_id: int) -> dict:
         while True:
-            message = await self._read_message(proc)
+            message = await self._read_message()
             if message.get("id") != request_id:
                 continue
             if "error" in message:
                 raise AgentError(f"Codex app-server request failed: {message['error']}")
             return message
 
-    async def _collect_turn(self, proc: asyncio.subprocess.Process, codex_thread_id: str) -> str:
+    async def _collect_turn(self, codex_thread_id: str) -> str:
         deltas: list[str] = []
         while True:
-            message = await self._read_message(proc, timeout=300)
+            message = await self._read_message(timeout=300)
             method = message.get("method")
             params = message.get("params") or {}
             if method == "item/agentMessage/delta" and params.get("threadId") == codex_thread_id:
@@ -133,7 +129,8 @@ class CodexAppServerAgent:
             elif method == "error":
                 raise AgentError(str(params))
 
-    async def _read_message(self, proc: asyncio.subprocess.Process, timeout: int = 60) -> dict:
+    async def _read_message(self, timeout: int = 60) -> dict:
+        proc = self._active_proc()
         if proc.stdout is None:
             raise AgentError("Codex app-server stdout is unavailable")
         try:
@@ -147,7 +144,16 @@ class CodexAppServerAgent:
             raise AgentError(f"Codex app-server exited unexpectedly: {stderr}")
         return json.loads(line)
 
-    async def _terminate(self, proc: asyncio.subprocess.Process) -> None:
+    def _active_proc(self) -> asyncio.subprocess.Process:
+        if self._proc is None:
+            raise AgentError("Codex app-server is not started")
+        return self._proc
+
+    async def _terminate(self) -> None:
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
         if proc.returncode is not None:
             return
         proc.terminate()
