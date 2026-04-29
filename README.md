@@ -1,20 +1,23 @@
 # Review Room
 
+Review Room helps a human reviewer understand large or AI-generated PRs faster by keeping code, review context, draft comments, and AI investigation threads in one place.
+
 Review Room is a voice-first code review cockpit for GitHub pull requests. It loads a PR into a focused three-pane interface: changed files on the left, PR details and diffs in the center, and an AI review workbench on the right.
 
 The core workflow is:
 
 1. Open a GitHub PR in Review Room.
 2. Browse changed files and select code in the diff.
-3. Ask a question by voice or text.
-4. Review Room sends the PR, file, and selection context to a Codex-backed backend.
-5. The answer appears as a persistent workbench thread next to the diff.
+3. Ask a question by voice or text.  The agent can show you around, answer questions and submit the PR comments and review for you.
+4. The built in realtime agent can answer many questions, and deeper analysis is sent to a Codex app server backend
+5. Answers to questions
 
-The product goal is not to replace human review. Review Room helps a human reviewer understand large or AI-generated PRs faster by keeping code, review context, draft comments, and AI investigation threads in one place.
+I built this to explore voice based agentic UIs, with the goal of demo-ing how this could potentially work as a feature of Codex itself.
+
 
 ## What It Does
 
-- Loads public GitHub pull requests.
+- Loads GitHub pull requests.
 - Shows changed files, PR metadata, imported GitHub review comments, and unified diffs.
 - Tracks the current file, selected diff lines, focused thread, and selected draft comment.
 - Lets the reviewer ask context-aware questions about the PR.
