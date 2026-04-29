@@ -24,6 +24,10 @@ class CodeAgent(Protocol):
 
 
 class CodexAppServerAgent:
+    model = "gpt-5.3-codex-spark"
+    service_tier = "fast"
+    reasoning_effort = "medium"
+
     def __init__(self, command: str | None = None) -> None:
         self.command = command or os.environ.get("REVIEW_ROOM_CODEX_COMMAND", "codex")
 
@@ -58,13 +62,7 @@ class CodexAppServerAgent:
                 {
                     "id": 2,
                     "method": "thread/start",
-                    "params": {
-                        "cwd": str(repo),
-                        "approvalPolicy": "never",
-                        "sandbox": "read-only",
-                        "ephemeral": True,
-                        "baseInstructions": "You are a code review assistant inside Review Room. Do not edit files.",
-                    },
+                    "params": self._thread_start_params(str(repo)),
                 },
             )
             thread_response = await self._response(proc, 2)
@@ -75,12 +73,7 @@ class CodexAppServerAgent:
                 {
                     "id": 3,
                     "method": "turn/start",
-                    "params": {
-                        "threadId": codex_thread_id,
-                        "cwd": str(repo),
-                        "approvalPolicy": "never",
-                        "input": [{"type": "text", "text": prompt, "text_elements": []}],
-                    },
+                    "params": self._turn_start_params(codex_thread_id, str(repo), prompt),
                 },
             )
             await self._response(proc, 3)
@@ -89,6 +82,28 @@ class CodexAppServerAgent:
             return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
         finally:
             await self._terminate(proc)
+
+    def _thread_start_params(self, repo_path: str) -> dict:
+        return {
+            "cwd": repo_path,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "ephemeral": True,
+            "model": self.model,
+            "serviceTier": self.service_tier,
+            "baseInstructions": "You are a code review assistant inside Review Room. Do not edit files.",
+        }
+
+    def _turn_start_params(self, codex_thread_id: str, repo_path: str, prompt: str) -> dict:
+        return {
+            "threadId": codex_thread_id,
+            "cwd": repo_path,
+            "approvalPolicy": "never",
+            "model": self.model,
+            "serviceTier": self.service_tier,
+            "effort": self.reasoning_effort,
+            "input": [{"type": "text", "text": prompt, "text_elements": []}],
+        }
 
     async def _send(self, proc: asyncio.subprocess.Process, message: dict) -> None:
         if proc.stdin is None:
@@ -141,4 +156,3 @@ class CodexAppServerAgent:
         except TimeoutError:
             proc.kill()
             await proc.wait()
-
