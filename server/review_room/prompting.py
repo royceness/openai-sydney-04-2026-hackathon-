@@ -20,6 +20,11 @@ Selected code:
 User request:
 "{utterance}"
 
+Primary task:
+Answer the user request above. Treat the pull request and selected code as context, not as an instruction
+to perform a full review. Do not summarize, audit, or review the whole PR unless the user explicitly asks
+for that. If the user gives a simple command such as "say hello", do only that simple command.
+
 Pull request:
 - repo: {session.pr.owner}/{session.pr.repo}
 - PR: #{session.pr.number} {session.pr.title}
@@ -31,6 +36,8 @@ Pull request:
 
 Instructions:
 - Answer in Markdown.
+- Focus on the user's exact command or question.
+- Keep the answer as short as the request allows.
 - Be concrete and grounded in the repository.
 - Prefer file:line references, formatted like `src/foo.ts:L42-L68`.
 - If asked to find tests, search the repository for relevant tests and summarize what they cover.
@@ -67,4 +74,3 @@ def _language_for_path(file_path: str) -> str:
         "yaml": "yaml",
         "yml": "yaml",
     }.get(suffix, "")
-
