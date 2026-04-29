@@ -3,6 +3,11 @@ import ReactMarkdown from "react-markdown";
 import type { CodeReference, CodeSelection, DraftComment, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
+type ThreadNavigationRequest = {
+  threadId: string;
+  requestId: number;
+};
+
 export function AIWorkbench({
   activeThreadId,
   comments,
@@ -15,6 +20,7 @@ export function AIWorkbench({
   onDeleteComment,
   onNavigateReference,
   onFollowUp,
+  threadNavigationRequest,
 }: {
   activeThreadId: string | null;
   comments: DraftComment[];
@@ -27,11 +33,14 @@ export function AIWorkbench({
   onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
+  threadNavigationRequest: ThreadNavigationRequest | null;
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(true);
+  const [flashedThreadId, setFlashedThreadId] = useState<string | null>(null);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
+  const threadElementRefs = useRef(new Map<string, HTMLElement>());
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
 
   useEffect(() => {
@@ -51,6 +60,37 @@ export function AIWorkbench({
       return next;
     });
   }, [threads]);
+
+  useEffect(() => {
+    if (!threadNavigationRequest) {
+      return;
+    }
+    const threadExists = threads.some((thread) => thread.id === threadNavigationRequest.threadId);
+    if (!threadExists) {
+      return;
+    }
+
+    onActivateThread(threadNavigationRequest.threadId);
+    setOpenThreadIds((current) => {
+      const next = new Set(current);
+      next.add(threadNavigationRequest.threadId);
+      return next;
+    });
+    setFlashedThreadId(threadNavigationRequest.threadId);
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      threadElementRefs.current.get(threadNavigationRequest.threadId)?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    });
+    const timeoutId = window.setTimeout(() => setFlashedThreadId(null), 500);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [onActivateThread, threadNavigationRequest, threads]);
 
   return (
     <aside className="flex h-screen w-[30rem] shrink-0 flex-col bg-[#080a0f]">
@@ -166,15 +206,23 @@ export function AIWorkbench({
           threads.map((thread) => {
             const isOpen = openThreadIds.has(thread.id);
             const isActive = activeThreadId === thread.id;
+            const isFlashed = flashedThreadId === thread.id;
 
             return (
               <article
                 className={
                   isActive
-                    ? "mb-3 overflow-hidden rounded-lg border border-violet-500/70 bg-slate-950 shadow-lg shadow-violet-950/30"
-                    : "mb-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+                    ? `mb-3 overflow-hidden rounded-lg border border-violet-500/70 bg-slate-950 shadow-lg shadow-violet-950/30 transition-colors duration-200 ${isFlashed ? "ring-2 ring-violet-300/60" : ""}`
+                    : `mb-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950 transition-colors duration-200 ${isFlashed ? "border-violet-400/70 bg-violet-950/10 ring-2 ring-violet-300/50" : ""}`
                 }
                 key={thread.id}
+                ref={(element) => {
+                  if (element) {
+                    threadElementRefs.current.set(thread.id, element);
+                  } else {
+                    threadElementRefs.current.delete(thread.id);
+                  }
+                }}
               >
                 <button
                   aria-expanded={isOpen}

@@ -28,6 +28,7 @@ describe("PullRequestPanel", () => {
         onEditComment={vi.fn()}
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
+        onNavigateThread={() => undefined}
         reviewId="rev_acme_review_room_247"
         selection={null}
         threads={[]}
