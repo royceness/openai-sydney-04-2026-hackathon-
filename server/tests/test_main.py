@@ -201,6 +201,34 @@ def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path,
     ]
 
 
+def test_create_review_retries_failed_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    session = main.store.get(review_id)
+    failed_thread = next(thread for thread in session.threads if thread.source == "init")
+    failed_thread.status = "failed"
+    failed_thread.error = "Separator is not found, and chunk exceed the limit"
+    failed_thread.markdown = None
+    failed_thread.codex_thread_id = None
+    main.store.save(session)
+
+    reload_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert reload_response.status_code == 200
+    session_threads = client.get(f"/api/reviews/{review_id}").json()["threads"]
+    retried_thread = next(thread for thread in session_threads if thread["id"] == failed_thread.id)
+    assert retried_thread["status"] == "complete"
+    assert retried_thread["error"] is None
+    assert retried_thread["markdown"]
+
+
 def test_create_review_uses_configured_init_threads(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "pr-summary,bug-finder")
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))

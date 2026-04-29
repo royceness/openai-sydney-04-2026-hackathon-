@@ -78,10 +78,19 @@ def configured_init_thread_prompts(raw_value: str | None) -> list[InitThreadProm
 
 
 def ensure_init_threads(session: ReviewSession, prompts: Sequence[InitThreadPrompt]) -> list[ReviewThread]:
-    existing_titles = {thread.title for thread in session.threads if thread.source == "init"}
+    existing_threads = {thread.title: thread for thread in session.threads if thread.source == "init"}
     created_threads: list[ReviewThread] = []
     for prompt in prompts:
-        if prompt.title in existing_titles:
+        existing_thread = existing_threads.get(prompt.title)
+        if existing_thread is not None:
+            if existing_thread.status == "failed":
+                existing_thread.status = "queued"
+                existing_thread.error = None
+                existing_thread.markdown = None
+                existing_thread.codex_thread_id = None
+                existing_thread.prompt = build_review_prompt(session, prompt.utterance, None)
+                existing_thread.utterance = prompt.utterance
+                created_threads.append(existing_thread)
             continue
         thread = ReviewThread(
             id=new_thread_id(),
@@ -94,5 +103,5 @@ def ensure_init_threads(session: ReviewSession, prompts: Sequence[InitThreadProm
         )
         session.threads.append(thread)
         created_threads.append(thread)
-        existing_titles.add(prompt.title)
+        existing_threads[prompt.title] = thread
     return created_threads
