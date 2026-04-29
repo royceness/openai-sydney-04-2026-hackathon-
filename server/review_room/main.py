@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import Request
+from fastapi.responses import Response
 
 from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
@@ -30,11 +34,67 @@ app.add_middleware(
 store = ReviewStore()
 github = GitHubClient()
 checkout = RepoCheckoutService(store.workspace_dir)
+HOME_ENV_PATH = Path.home() / ".env"
 
 
 @app.get("/api/bootstrap", response_model=BootstrapResponse)
 async def bootstrap() -> BootstrapResponse:
     return BootstrapResponse(pr_url=os.environ.get("REVIEW_ROOM_PR_URL"))
+
+
+@app.post("/api/realtime/session")
+async def create_realtime_session(request: Request) -> Response:
+    api_key = get_openai_api_key()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is required for voice support")
+
+    content_type = request.headers.get("content-type")
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if content_type:
+        headers["Content-Type"] = content_type
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        realtime_response = await client.post(
+            "https://api.openai.com/v1/realtime/calls",
+            content=await request.body(),
+            headers=headers,
+        )
+
+    return Response(
+        content=realtime_response.content,
+        media_type=realtime_response.headers.get("content-type", "application/sdp"),
+        status_code=realtime_response.status_code,
+    )
+
+
+def get_openai_api_key() -> str | None:
+    env_key = os.environ.get("OPENAI_API_KEY")
+    if env_key:
+        return env_key
+    return read_dotenv_value(HOME_ENV_PATH, "OPENAI_API_KEY")
+
+
+def read_dotenv_value(path: Path, key: str) -> str | None:
+    if not path.exists():
+        return None
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped.removeprefix("export ").strip()
+        name, separator, value = stripped.partition("=")
+        if separator and name.strip() == key:
+            return unquote_dotenv_value(value.strip())
+
+    return None
+
+
+def unquote_dotenv_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
 
 
 @app.post("/api/reviews", response_model=CreateReviewResponse)

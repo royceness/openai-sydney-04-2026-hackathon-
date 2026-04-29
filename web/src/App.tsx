@@ -136,7 +136,7 @@ export default function App() {
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col border-x border-slate-800/80">
-        <PullRequestPanel pr={review.pr} />
+        <PullRequestPanel pr={review.pr} selection={selection} />
         <DiffPane
           filePath={activeFile}
           diff={activeDiff}
@@ -213,4 +213,3 @@ function PrUrlForm({ onSubmit }: { onSubmit: (prUrl: string) => Promise<void> })
     </div>
   );
 }
-
