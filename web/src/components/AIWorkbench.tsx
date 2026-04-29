@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { CodeSelection, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
@@ -16,15 +16,22 @@ export function AIWorkbench({
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
 
   useEffect(() => {
+    const newThreadIds = threads.map((thread) => thread.id).filter((threadId) => !knownThreadIdsRef.current.has(threadId));
+    for (const threadId of newThreadIds) {
+      knownThreadIdsRef.current.add(threadId);
+    }
+    if (newThreadIds.length === 0) {
+      return;
+    }
+
     setOpenThreadIds((current) => {
       const next = new Set(current);
-      for (const thread of threads) {
-        if (!current.has(thread.id)) {
-          next.add(thread.id);
-        }
+      for (const threadId of newThreadIds) {
+        next.add(threadId);
       }
       return next;
     });
