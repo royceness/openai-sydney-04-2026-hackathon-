@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AIWorkbench } from "./AIWorkbench";
 
 vi.mock("mermaid", () => ({
@@ -15,6 +15,10 @@ vi.mock("mermaid", () => ({
 describe("AIWorkbench", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("submits a manual question", async () => {
@@ -51,5 +55,87 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
     expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
+  });
+
+  it("collapses and reopens thread output", async () => {
+    render(
+      <AIWorkbench
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[
+          {
+            id: "thr_1",
+            source: "manual",
+            title: "Explain this function",
+            status: "complete",
+            markdown: "This is the thread body.",
+            created_at: "2026-04-29T00:00:00Z",
+            updated_at: "2026-04-29T00:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: /Explain this function/ });
+
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("This is the thread body.")).toBeInTheDocument();
+
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("This is the thread body.")).not.toBeInTheDocument();
+
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("This is the thread body.")).toBeVisible();
+  });
+
+  it("keeps a collapsed thread closed when thread content streams in", async () => {
+    const { rerender } = render(
+      <AIWorkbench
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[
+          {
+            id: "thr_1",
+            source: "manual",
+            title: "Explain this function",
+            status: "running",
+            markdown: "Initial body.",
+            created_at: "2026-04-29T00:00:00Z",
+            updated_at: "2026-04-29T00:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: /Explain this function/ });
+    await userEvent.click(header);
+
+    rerender(
+      <AIWorkbench
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[
+          {
+            id: "thr_1",
+            source: "manual",
+            title: "Explain this function",
+            status: "complete",
+            markdown: "Updated streamed body.",
+            created_at: "2026-04-29T00:00:00Z",
+            updated_at: "2026-04-29T00:00:01Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Updated streamed body.")).not.toBeInTheDocument();
   });
 });
