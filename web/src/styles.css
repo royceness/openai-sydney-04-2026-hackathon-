@@ -57,3 +57,8 @@ body {
   padding: 0;
   color: #e2e8f0;
 }
+
+.mermaid-render svg {
+  max-width: 100%;
+  height: auto;
+}

@@ -1,9 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AIWorkbench } from "./AIWorkbench";
 
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async (_id: string, source: string) => ({
+      svg: `<svg role="img"><text>${source}</text></svg>`,
+    })),
+  },
+}));
+
 describe("AIWorkbench", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("submits a manual question", async () => {
     const onAsk = vi.fn().mockResolvedValue(undefined);
     render(<AIWorkbench onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
@@ -37,6 +50,6 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("Diagram this flow")).toBeInTheDocument();
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("buildDiagram")).toBeInTheDocument();
-    expect(screen.getByText(/flowchart LR/)).toBeInTheDocument();
+    expect(screen.getByText("Rendering diagram...")).toBeInTheDocument();
   });
 });

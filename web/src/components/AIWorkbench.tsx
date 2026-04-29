@@ -1,6 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { CodeSelection, ReviewThread } from "../types";
+import { MermaidBlock } from "./MermaidBlock";
 
 export function AIWorkbench({
   threads,
@@ -85,7 +86,20 @@ export function AIWorkbench({
               {thread.error ? <p className="mt-3 text-sm text-rose-300">{thread.error}</p> : null}
               {thread.markdown ? (
                 <div className="markdown-body mt-3 text-sm leading-6 text-slate-300">
-                  <ReactMarkdown>{thread.markdown}</ReactMarkdown>
+                  <ReactMarkdown
+                    components={{
+                      code({ children, className }) {
+                        const language = /language-(\w+)/.exec(className ?? "")?.[1];
+                        const source = String(children).replace(/\n$/, "");
+                        if (language === "mermaid") {
+                          return <MermaidBlock source={source} />;
+                        }
+                        return <code className={className}>{children}</code>;
+                      },
+                    }}
+                  >
+                    {thread.markdown}
+                  </ReactMarkdown>
                 </div>
               ) : null}
             </article>
