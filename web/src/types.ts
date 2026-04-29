@@ -41,7 +41,7 @@ export type ReviewSession = {
   pr: PullRequestInfo;
   files: ChangedFile[];
   threads: ReviewThread[];
-  comments: unknown[];
+  comments: ReviewComment[];
   repo_path?: string | null;
   created_at: string;
   updated_at: string;
@@ -52,6 +52,7 @@ export type CreateReviewResponse = {
   pr: PullRequestInfo;
   files: ChangedFile[];
   threads: ReviewThread[];
+  comments: ReviewComment[];
 };
 
 export type FileDiffResponse = {
@@ -72,6 +73,19 @@ export type CodeSelection = {
   selectedText: string;
   diffHunk?: string;
   commitSha?: string;
+};
+
+export type ReviewComment = {
+  id: string;
+  source: "github" | "draft";
+  body: string;
+  context: CodeSelection;
+  status: "imported" | "draft" | "queued" | "published" | "failed";
+  author?: string | null;
+  github_comment_id?: number | null;
+  github_comment_url?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type CodeReference = {

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview } from "./api";
+import { createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview, updateComment } from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
 import { PullRequestPanel } from "./components/PullRequestPanel";
-import type { ChangedFile, CodeReference, CodeSelection, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
+import type {
+  ChangedFile,
+  CodeReference,
+  CodeSelection,
+  PullRequestInfo,
+  ReviewComment,
+  ReviewContext,
+  ReviewThread,
+} from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
 
@@ -13,6 +21,7 @@ type ReviewState = {
   pr: PullRequestInfo;
   files: ChangedFile[];
   threads: ReviewThread[];
+  comments: ReviewComment[];
 };
 
 export default function App() {
@@ -25,6 +34,7 @@ export default function App() {
   const [selection, setSelection] = useState<CodeSelection | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
 
   const loadReview = useCallback(async (prUrl: string) => {
@@ -38,6 +48,7 @@ export default function App() {
         pr: created.pr,
         files: created.files,
         threads: created.threads,
+        comments: created.comments,
       };
       setReview(nextReview);
       setLoadState("ready");
@@ -128,6 +139,7 @@ export default function App() {
             pr: session.pr,
             files: session.files,
             threads: session.threads,
+            comments: session.comments,
           });
         })
         .catch((caught) => setThreadError(caught instanceof Error ? caught.message : "Failed to refresh threads"));
@@ -157,6 +169,7 @@ export default function App() {
           pr: session.pr,
           files: session.files,
           threads: session.threads,
+          comments: session.comments,
         });
         if (response.status === "failed") {
           setThreadError("Thread failed to start");
@@ -172,6 +185,24 @@ export default function App() {
     setActiveFile(reference.filePath);
     setSelection(null);
     setTargetReference(reference);
+  }, []);
+
+  const handleUpdateComment = useCallback(async (commentId: string, body: string) => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      throw new Error("Review session is not loaded");
+    }
+    const updated = await updateComment({ reviewId: context.reviewId, commentId, body });
+    setReview((current) => {
+      if (!current) {
+        return current;
+      }
+      return {
+        ...current,
+        comments: current.comments.map((comment) => (comment.id === updated.id ? updated : comment)),
+      };
+    });
+    return updated;
   }, []);
 
   if (loadState === "booting" || loadState === "loading") {
@@ -194,6 +225,7 @@ export default function App() {
         onSelectFile={(filePath) => {
           setActiveFile(filePath);
           setSelection(null);
+          setActiveCommentId(null);
         }}
       />
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
@@ -204,6 +236,7 @@ export default function App() {
           onNavigateFile={(filePath) => {
             setActiveFile(filePath);
             setSelection(null);
+            setActiveCommentId(null);
           }}
           pr={review.pr}
           selection={selection}
@@ -212,6 +245,10 @@ export default function App() {
           filePath={activeFile}
           diff={activeDiff}
           diffError={diffError}
+          comments={review.comments.filter((comment) => comment.context.filePath === activeFile)}
+          activeCommentId={activeCommentId}
+          onActiveCommentChange={setActiveCommentId}
+          onUpdateComment={handleUpdateComment}
           targetReference={targetReference}
           selection={selection}
           onSelectionChange={setSelection}

@@ -1,4 +1,12 @@
-import type { CodeSelection, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession, ReviewThread } from "./types";
+import type {
+  CodeSelection,
+  CreateReviewResponse,
+  CreateThreadResponse,
+  FileDiffResponse,
+  ReviewComment,
+  ReviewSession,
+  ReviewThread,
+} from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -59,4 +67,24 @@ export async function createThread({
     }),
   });
   return readJson<CreateThreadResponse>(response);
+}
+
+export async function updateComment({
+  reviewId,
+  commentId,
+  body,
+}: {
+  reviewId: string;
+  commentId: string;
+  body: string;
+}): Promise<ReviewComment> {
+  const response = await fetch(
+    `/api/reviews/${encodeURIComponent(reviewId)}/comments/${encodeURIComponent(commentId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    },
+  );
+  return readJson<ReviewComment>(response);
 }
