@@ -41,7 +41,7 @@ class CodeAgent(Protocol):
 class CodexAppServerAgent:
     model = "gpt-5.3-codex-spark"
     service_tier = "fast"
-    reasoning_effort = "medium"
+    reasoning_effort = "low"
 
     def __init__(self, command: str | None = None) -> None:
         self.command = command or os.environ.get("REVIEW_ROOM_CODEX_COMMAND", "codex")

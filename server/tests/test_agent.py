@@ -6,7 +6,7 @@ import pytest
 from review_room.agent import CodexAppServerAgent
 
 
-def test_codex_agent_requests_spark_fast_medium_reasoning() -> None:
+def test_codex_agent_requests_spark_fast_low_reasoning() -> None:
     agent = CodexAppServerAgent(command="codex")
 
     thread_params = agent._thread_start_params("/tmp/repo")
@@ -16,7 +16,7 @@ def test_codex_agent_requests_spark_fast_medium_reasoning() -> None:
     assert thread_params["serviceTier"] == "fast"
     assert turn_params["model"] == "gpt-5.3-codex-spark"
     assert turn_params["serviceTier"] == "fast"
-    assert turn_params["effort"] == "medium"
+    assert turn_params["effort"] == "low"
 
 
 @pytest.mark.asyncio

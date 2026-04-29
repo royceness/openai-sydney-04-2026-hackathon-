@@ -16,6 +16,7 @@ from fastapi.responses import Response
 from review_room.agent import CodexAppServerAgent
 from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
+from review_room.init_threads import configured_init_thread_prompts, ensure_init_threads
 from review_room.models import (
     BootstrapResponse,
     CodeSelection,
@@ -136,7 +137,7 @@ def unquote_dotenv_value(value: str) -> str:
 
 
 @app.post("/api/reviews", response_model=CreateReviewResponse)
-async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
+async def create_review(request: CreateReviewRequest, background_tasks: BackgroundTasks) -> CreateReviewResponse:
     try:
         parsed = parse_pr_url(str(request.pr_url))
         pr, files = await github.fetch_pull_request(parsed)
@@ -166,7 +167,18 @@ async def create_review(request: CreateReviewRequest) -> CreateReviewResponse:
         repo_path=str(repo_path),
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
+    try:
+        created_init_threads = ensure_init_threads(
+            session,
+            configured_init_thread_prompts(os.environ.get("REVIEW_ROOM_INIT_THREADS")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     store.save(session)
+    for thread in created_init_threads:
+        background_tasks.add_task(run_review_thread, store, agent, session.id, thread.id)
+
     return CreateReviewResponse(
         review_id=session.id,
         pr=session.pr,
