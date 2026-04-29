@@ -16,7 +16,11 @@ Review Room can already draft local pull request comments from typed or voice in
 - [x] (2026-04-29) Add frontend API/types and wire `App` and `AIWorkbench` so drafts can be published from the UI.
 - [x] (2026-04-29) Add backend and frontend tests that prove publishing works and failures are surfaced.
 - [x] (2026-04-29) Run backend tests, frontend tests, and frontend build.
-- [ ] Commit, push the branch, open a draft PR, and test publishing a comment against that PR.
+- [x] (2026-04-29) Commit, push the branch, and open a draft PR for live testing.
+- [x] (2026-04-29) Add filesystem-backed backend persistence APIs for draft PR comment create, edit, and delete.
+- [x] (2026-04-29) Switch the frontend draft/edit/delete flow to use persisted backend comments instead of frontend-only state.
+- [ ] Commit and push the persistence update.
+- [ ] Test publishing a comment against the draft PR.
 
 ## Surprises & Discoveries
 
@@ -26,6 +30,8 @@ Review Room can already draft local pull request comments from typed or voice in
   Evidence: GitHub Docs search result for "Create a review comment for a pull request" states this recommendation.
 - Observation: The app's production build still reports the existing large Mermaid-related chunk warning, but the build succeeds.
   Evidence: `npm run build` exits 0 and prints `✓ built`, followed by Rollup chunk-size warnings for generated assets.
+- Observation: Backend session JSON already persisted `comments`, so the missing persistence piece was API usage, not storage infrastructure.
+  Evidence: `ReviewSession` has `comments: list[DraftComment]`, and `ReviewStore.save` writes the whole session to `.review-room/sessions/<review_id>.json`.
 
 ## Decision Log
 
@@ -38,10 +44,13 @@ Review Room can already draft local pull request comments from typed or voice in
 - Decision: Fail the publish request if GitHub rejects any comment rather than silently skipping or falling back.
   Rationale: The repository instructions prefer fail-fast behavior and no swallowed errors. This also avoids reporting that comments were published when GitHub did not accept them.
   Date/Author: 2026-04-29 / Codex
+- Decision: Publish by persisted comment ID rather than by sending full draft comment bodies from the client.
+  Rationale: Once comments are persisted, the backend should be the source of truth for the body, context, and status being published. This avoids publishing stale or tampered client payloads.
+  Date/Author: 2026-04-29 / Codex
 
 ## Outcomes & Retrospective
 
-The code implementation is complete and validated locally. The backend now creates GitHub pull request review comments, the frontend can publish queued drafts, and tests cover successful publishing plus failure display. The remaining outcome is the live GitHub test on this branch's draft PR.
+The code implementation is complete and validated locally. The backend now persists draft PR comments in review-session JSON files, creates GitHub pull request review comments from persisted comment IDs, and the frontend can create, edit, delete, and publish queued drafts through backend APIs. Tests cover successful persistence, publishing, and failure display. The remaining outcome is the live GitHub test on this branch's draft PR.
 
 ## Context and Orientation
 
@@ -57,9 +66,11 @@ First, extend `server/review_room/models.py` with request and response models fo
 
 Next, add a `GitHubClient.create_pull_request_review_comment` method in `server/review_room/github.py`. It should build the REST request body using `body`, `commit_id`, `path`, `side`, `line`, and for ranges `start_line` and `start_side`. It should map `CodeSelection.side` values to GitHub's `RIGHT` for new-side comments and `LEFT` for old-side comments. If line numbers are missing, it should raise a clear error instead of sending an invalid GitHub request.
 
-Then, add `POST /api/reviews/{review_id}/comments/publish` in `server/review_room/main.py`. The endpoint should load the session, validate each comment path is in the changed file list, call the GitHub client for each draft, update the saved session comments to published records, and return the published comments. If GitHub returns an error, it should propagate as an HTTP error and leave the frontend able to show the failure.
+Then, add comment persistence endpoints in `server/review_room/main.py`: `POST /api/reviews/{review_id}/comments` to create a draft, `PATCH /api/reviews/{review_id}/comments/{comment_id}` to update an unpublished draft, and `DELETE /api/reviews/{review_id}/comments/{comment_id}` to delete an unpublished draft. These endpoints should use `ReviewStore.save`, which writes the whole review session to filesystem JSON.
 
-On the frontend, add `publishComments` to `web/src/api.ts` and matching types to `web/src/types.ts`. Update `App` to pass an `onPublishComments` handler into `AIWorkbench`. That handler should send only draft comments to the backend, mark them as publishing while the request is in flight, update successful drafts to `published` with GitHub URLs, and show errors in the workbench when publishing fails.
+Add `POST /api/reviews/{review_id}/comments/publish` in `server/review_room/main.py`. The endpoint should load persisted draft comments by ID, validate each comment path is in the changed file list, call the GitHub client for each draft, update the saved session comments to published records, and return the published comments. If GitHub returns an error, it should propagate as an HTTP error and leave the frontend able to show the failure.
+
+On the frontend, add `createComment`, `updateComment`, `deleteComment`, and `publishComments` to `web/src/api.ts` and matching types to `web/src/types.ts`. Update `App` so draft, edit, delete, and publish actions call the backend APIs. Publishing should send only persisted comment IDs to the backend, mark them as publishing while the request is in flight, update successful drafts to `published` with GitHub URLs, and show errors in the workbench when publishing fails.
 
 Finally, update `AIWorkbench` so the PR Comments panel has a clear publish button when draft comments exist, disables it while publishing, and renders published comments with a GitHub link. Add tests in `server/tests/test_main.py`, `server/tests/test_github.py`, `web/src/App.test.tsx`, and `web/src/components/AIWorkbench.test.tsx`.
 
@@ -81,7 +92,7 @@ Then load the created pull request in Review Room and test that a draft comment 
 
 ## Validation and Acceptance
 
-Backend acceptance: `server` tests pass and include coverage that a publish request calls GitHub with the expected REST payload for a single-line and range comment. A request for an unchanged or unknown file returns an error instead of posting. This has been verified with `uv run pytest`, which reported 36 passed.
+Backend acceptance: `server` tests pass and include coverage that a draft comment can be created, updated, deleted, persisted in the review session, and published by ID. The tests also cover the GitHub REST payload for a single-line and range comment. A request for an unchanged or unknown file returns an error instead of posting. This has been verified with `uv run pytest`, which reported 37 passed.
 
 Frontend acceptance: `web` tests pass and include coverage that a draft comment can be published, the publish button disables when no drafts remain, a returned GitHub URL is rendered for the published comment, and failures remain visible for retry. This has been verified with `npm test -- --run`, which reported 42 passed. The production build has been verified with `npm run build`.
 
@@ -107,6 +118,9 @@ Relevant current files:
 
 Backend model names to add:
 
+    CreateCommentRequest
+    UpdateCommentRequest
+    DeleteCommentResponse
     PublishCommentRequest
     PublishCommentsRequest
     PublishedComment
@@ -118,10 +132,15 @@ Backend client method to add:
 
 Frontend API helper to add:
 
-    publishComments({ reviewId, comments }): Promise<PublishCommentsResponse>
+    createComment({ reviewId, body, context }): Promise<DraftComment>
+    updateComment({ reviewId, commentId, body }): Promise<DraftComment>
+    deleteComment({ reviewId, commentId }): Promise<DeleteCommentResponse>
+    publishComments({ reviewId, commentIds }): Promise<PublishCommentsResponse>
 
 ## Debt and Future Issues
 
 No future issues have been identified yet.
 
 Revision note, 2026-04-29: Updated progress and validation after implementing the backend publish endpoint, frontend publish UI, and tests. The live GitHub PR test remains.
+
+Revision note, 2026-04-29: Updated the plan after adding backend persistence endpoints for PR comments and switching publish to persisted comment IDs. This change was requested after the first publish implementation.

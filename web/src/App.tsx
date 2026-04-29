@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createFollowUp, createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview, publishComments } from "./api";
+import {
+  createComment,
+  createFollowUp,
+  createReview,
+  createThread,
+  deleteComment,
+  getBootstrapPrUrl,
+  getFileDiff,
+  getReview,
+  publishComments,
+  updateComment,
+} from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
@@ -126,17 +137,18 @@ export default function App() {
     };
   }, [activeFile, review, selection]);
 
-  const addDraftComment = useCallback((body: string, context: CodeSelection) => {
-    setComments((current) => [
-      {
-        id: `draft_${Date.now().toString(36)}_${current.length + 1}`,
-        body,
-        context,
-        status: "draft",
-        created_at: new Date().toISOString(),
-      },
-      ...current,
-    ]);
+  const addDraftComment = useCallback(async (body: string, context: CodeSelection) => {
+    const reviewContext = reviewContextRef.current;
+    if (!reviewContext) {
+      throw new Error("Review is not loaded");
+    }
+    const comment = await createComment({
+      reviewId: reviewContext.reviewId,
+      body,
+      context,
+    });
+    setComments((current) => [comment, ...current.filter((item) => item.id !== comment.id)]);
+    return comment;
   }, []);
 
   useEffect(() => {
@@ -147,8 +159,9 @@ export default function App() {
     if (!pendingCommentBody || !selection) {
       return;
     }
-    addDraftComment(pendingCommentBody, selection);
-    setPendingCommentBody(null);
+    void addDraftComment(pendingCommentBody, selection)
+      .then(() => setPendingCommentBody(null))
+      .catch((caught) => setCommentError(caught instanceof Error ? caught.message : "Failed to create comment"));
   }, [addDraftComment, pendingCommentBody, selection]);
 
   useEffect(() => {
@@ -165,6 +178,7 @@ export default function App() {
             files: session.files,
             threads: session.threads,
           });
+          setComments(session.comments);
         })
         .catch((caught) => setThreadError(caught instanceof Error ? caught.message : "Failed to refresh threads"));
     }, 500);
@@ -194,6 +208,7 @@ export default function App() {
           files: session.files,
           threads: session.threads,
         });
+        setComments(session.comments);
         if (response.status === "failed") {
           setThreadError("Thread failed to start");
         }
@@ -230,6 +245,7 @@ export default function App() {
         files: session.files,
         threads: session.threads,
       });
+      setComments(session.comments);
       if (response.status === "failed") {
         setThreadError("Follow-up failed to start");
       }
@@ -239,25 +255,31 @@ export default function App() {
   }, []);
 
   const handleDraftComment = useCallback(
-    (body: string) => {
+    async (body: string) => {
       const trimmed = body.trim();
       if (!trimmed) {
         return { status: "empty" as const };
       }
       const context = reviewContextRef.current;
-      if (context?.selection) {
-        addDraftComment(trimmed, context.selection);
-        return { status: "created" as const };
-      }
-      if (context?.activeFile) {
-        addDraftComment(trimmed, {
-          filePath: context.activeFile,
-          side: "new",
-          startLine: 1,
-          endLine: 1,
-          selectedText: "",
-        });
-        return { status: "created" as const };
+      try {
+        if (context?.selection) {
+          await addDraftComment(trimmed, context.selection);
+          return { status: "created" as const };
+        }
+        if (context?.activeFile) {
+          await addDraftComment(trimmed, {
+            filePath: context.activeFile,
+            side: "new",
+            startLine: 1,
+            endLine: 1,
+            selectedText: "",
+          });
+          return { status: "created" as const };
+        }
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Failed to create comment";
+        setCommentError(message);
+        return { status: "failed" as const, message };
       }
       setPendingCommentBody(trimmed);
       return { status: "selection-required" as const };
@@ -265,24 +287,42 @@ export default function App() {
     [addDraftComment],
   );
 
-  const handleEditComment = useCallback((commentId: string, body: string) => {
+  const handleEditComment = useCallback(async (commentId: string, body: string) => {
     const trimmed = body.trim();
     if (!trimmed) {
       return { status: "empty" as const };
     }
-    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+    const context = reviewContextRef.current;
+    if (!context || !commentsRef.current.some((comment) => comment.id === commentId)) {
       return { status: "not-found" as const };
     }
-    setComments((current) => current.map((comment) => (comment.id === commentId ? { ...comment, body: trimmed } : comment)));
-    return { status: "updated" as const };
+    try {
+      const updated = await updateComment({ reviewId: context.reviewId, commentId, body: trimmed });
+      setComments((current) => current.map((comment) => (comment.id === commentId ? updated : comment)));
+      setCommentError(null);
+      return { status: "updated" as const };
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to update comment";
+      setCommentError(message);
+      return { status: "failed" as const, message };
+    }
   }, []);
 
-  const handleDeleteComment = useCallback((commentId: string) => {
-    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+  const handleDeleteComment = useCallback(async (commentId: string) => {
+    const context = reviewContextRef.current;
+    if (!context || !commentsRef.current.some((comment) => comment.id === commentId)) {
       return { status: "not-found" as const };
     }
-    setComments((current) => current.filter((comment) => comment.id !== commentId));
-    return { status: "deleted" as const };
+    try {
+      await deleteComment({ reviewId: context.reviewId, commentId });
+      setComments((current) => current.filter((comment) => comment.id !== commentId));
+      setCommentError(null);
+      return { status: "deleted" as const };
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to delete comment";
+      setCommentError(message);
+      return { status: "failed" as const, message };
+    }
   }, []);
 
   const handlePublishComments = useCallback(async () => {
@@ -304,7 +344,7 @@ export default function App() {
     );
 
     try {
-      const response = await publishComments({ reviewId: context.reviewId, comments: publishableComments });
+      const response = await publishComments({ reviewId: context.reviewId, commentIds: publishableComments.map((comment) => comment.id) });
       const publishedById = new Map(response.comments.map((comment) => [comment.id, comment]));
       setComments((current) =>
         current.map((comment) => {

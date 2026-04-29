@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -17,12 +18,15 @@ from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
 from review_room.models import (
     BootstrapResponse,
+    CodeSelection,
+    CreateCommentRequest,
     CreateFollowUpRequest,
     CreateFollowUpResponse,
     CreateReviewRequest,
     CreateReviewResponse,
     CreateThreadRequest,
     CreateThreadResponse,
+    DeleteCommentResponse,
     DraftComment,
     FileContentResponse,
     FileDiffResponse,
@@ -30,6 +34,7 @@ from review_room.models import (
     PublishCommentsResponse,
     ReviewSession,
     ReviewThread,
+    UpdateCommentRequest,
 )
 from review_room.prompting import build_follow_up_prompt, build_review_prompt
 from review_room.store import ReviewStore, stable_review_id
@@ -302,6 +307,62 @@ async def create_follow_up(
     return CreateFollowUpResponse(thread_id=thread.id, status=thread.status)
 
 
+@app.post("/api/reviews/{review_id}/comments", response_model=DraftComment)
+async def create_comment(review_id: str, request: CreateCommentRequest) -> DraftComment:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    _validate_comment_request(session, request.body, request.context)
+    comment = DraftComment(
+        id=new_comment_id(),
+        body=request.body.strip(),
+        context=request.context,
+        status="draft",
+    )
+    session.comments.insert(0, comment)
+    store.save(session)
+    return comment
+
+
+@app.patch("/api/reviews/{review_id}/comments/{comment_id}", response_model=DraftComment)
+async def update_comment(review_id: str, comment_id: str, request: UpdateCommentRequest) -> DraftComment:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    comment = _find_comment_or_none(session, comment_id)
+    if comment is None:
+        raise HTTPException(status_code=404, detail="PR comment not found")
+    if comment.status == "published":
+        raise HTTPException(status_code=409, detail="Published PR comments cannot be edited in Review Room")
+    _validate_comment_request(session, request.body, comment.context)
+    comment.body = request.body.strip()
+    comment.status = "draft"
+    comment.github_comment_url = None
+    store.save(session)
+    return comment
+
+
+@app.delete("/api/reviews/{review_id}/comments/{comment_id}", response_model=DeleteCommentResponse)
+async def delete_comment(review_id: str, comment_id: str) -> DeleteCommentResponse:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    comment = _find_comment_or_none(session, comment_id)
+    if comment is None:
+        raise HTTPException(status_code=404, detail="PR comment not found")
+    if comment.status == "published":
+        raise HTTPException(status_code=409, detail="Published PR comments cannot be deleted in Review Room")
+    session.comments = [item for item in session.comments if item.id != comment_id]
+    store.save(session)
+    return DeleteCommentResponse(comment_id=comment_id, status="deleted")
+
+
 @app.post("/api/reviews/{review_id}/comments/publish", response_model=PublishCommentsResponse)
 async def publish_comments(review_id: str, request: PublishCommentsRequest) -> PublishCommentsResponse:
     try:
@@ -309,16 +370,19 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Review session not found") from exc
 
-    changed_paths = {file.path for file in session.files}
-    for comment in request.comments:
-        if comment.context.file_path not in changed_paths:
-            raise HTTPException(status_code=404, detail=f"Changed file not found: {comment.context.file_path}")
-        if not comment.body.strip():
-            raise HTTPException(status_code=400, detail="Comment body is required")
+    comments_to_publish = []
+    for comment_id in request.comment_ids:
+        comment = _find_comment_or_none(session, comment_id)
+        if comment is None:
+            raise HTTPException(status_code=404, detail=f"PR comment not found: {comment_id}")
+        if comment.status == "published":
+            continue
+        _validate_comment_request(session, comment.body, comment.context)
+        comments_to_publish.append(comment)
 
     published_comments = []
     try:
-        for comment in request.comments:
+        for comment in comments_to_publish:
             published_comments.append(await github.create_pull_request_review_comment(session.pr, comment))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -326,14 +390,30 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     published_by_id = {comment.id: comment for comment in published_comments}
-    remaining = [comment for comment in session.comments if comment.id not in published_by_id]
     session.comments = [
-        *remaining,
-        *[DraftComment(**comment.model_dump()) for comment in published_comments],
+        DraftComment(**published_by_id[comment.id].model_dump()) if comment.id in published_by_id else comment
+        for comment in session.comments
     ]
     session.updated_at = datetime.now(timezone.utc)
     store.save(session)
     return PublishCommentsResponse(comments=published_comments)
+
+
+def new_comment_id() -> str:
+    return f"draft_{uuid4().hex[:12]}"
+
+
+def _find_comment_or_none(session: ReviewSession, comment_id: str) -> DraftComment | None:
+    return next((comment for comment in session.comments if comment.id == comment_id), None)
+
+
+def _validate_comment_request(session: ReviewSession, body: str, context: CodeSelection) -> None:
+    if not body.strip():
+        raise HTTPException(status_code=400, detail="Comment body is required")
+    if context.file_path not in {file.path for file in session.files}:
+        raise HTTPException(status_code=404, detail=f"Changed file not found: {context.file_path}")
+    if context.start_line is None or context.end_line is None:
+        raise HTTPException(status_code=400, detail="PR comments require selected line numbers")
 
 
 def _requested_line_window(

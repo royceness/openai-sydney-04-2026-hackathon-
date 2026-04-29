@@ -3,6 +3,7 @@ import type {
   CreateFollowUpResponse,
   CreateReviewResponse,
   CreateThreadResponse,
+  DeleteCommentResponse,
   DraftComment,
   FileContentResponse,
   FileDiffResponse,
@@ -126,23 +127,68 @@ export async function createFollowUp({
   return readJson<CreateFollowUpResponse>(response);
 }
 
-export async function publishComments({
+export async function createComment({
   reviewId,
-  comments,
+  body,
+  context,
 }: {
   reviewId: string;
-  comments: DraftComment[];
+  body: string;
+  context: CodeSelection;
+}): Promise<DraftComment> {
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body, context }),
+  });
+  return readJson<DraftComment>(response);
+}
+
+export async function updateComment({
+  reviewId,
+  commentId,
+  body,
+}: {
+  reviewId: string;
+  commentId: string;
+  body: string;
+}): Promise<DraftComment> {
+  const response = await fetch(
+    `/api/reviews/${encodeURIComponent(reviewId)}/comments/${encodeURIComponent(commentId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    },
+  );
+  return readJson<DraftComment>(response);
+}
+
+export async function deleteComment({
+  reviewId,
+  commentId,
+}: {
+  reviewId: string;
+  commentId: string;
+}): Promise<DeleteCommentResponse> {
+  const response = await fetch(
+    `/api/reviews/${encodeURIComponent(reviewId)}/comments/${encodeURIComponent(commentId)}`,
+    { method: "DELETE" },
+  );
+  return readJson<DeleteCommentResponse>(response);
+}
+
+export async function publishComments({
+  reviewId,
+  commentIds,
+}: {
+  reviewId: string;
+  commentIds: string[];
 }): Promise<PublishCommentsResponse> {
   const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/comments/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      comments: comments.map((comment) => ({
-        id: comment.id,
-        body: comment.body,
-        context: comment.context,
-      })),
-    }),
+    body: JSON.stringify({ comment_ids: commentIds }),
   });
   return readJson<PublishCommentsResponse>(response);
 }

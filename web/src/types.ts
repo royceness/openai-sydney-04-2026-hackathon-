@@ -110,6 +110,11 @@ export type PublishedComment = {
   github_comment_url: string;
 };
 
+export type DeleteCommentResponse = {
+  comment_id: string;
+  status: "deleted";
+};
+
 export type CodeReference = {
   filePath: string;
   startLine: number;

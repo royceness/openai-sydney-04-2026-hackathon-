@@ -36,6 +36,13 @@ const selectedCode: CodeSelection = {
 };
 
 vi.mock("./api", () => ({
+  createComment: vi.fn(async ({ body, context }: { body: string; context: CodeSelection }) => ({
+    id: "draft_1",
+    body,
+    context,
+    status: "draft" as const,
+    created_at: "2026-04-29T00:00:00Z",
+  })),
   createReview: vi.fn(async () => ({
     review_id: "rev_1",
     pr,
@@ -44,16 +51,20 @@ vi.mock("./api", () => ({
     comments: [],
   })),
   createThread: vi.fn(),
+  deleteComment: vi.fn(async () => ({ comment_id: "draft_1", status: "deleted" as const })),
   getBootstrapPrUrl: vi.fn(),
   getFileDiff: vi.fn(async () => ({ file_path: "README", diff: files[0].patch })),
   getReview: vi.fn(),
-  publishComments: vi.fn(async ({ comments }: { comments: DraftComment[] }) => ({
-    comments: comments.map((comment) => ({
-      ...comment,
+  publishComments: vi.fn(async ({ commentIds }: { commentIds: string[] }) => ({
+    comments: commentIds.map((commentId) => ({
+      id: commentId,
+      body: "this needs tests",
+      context: selectedCode,
       status: "published" as const,
       github_comment_url: "https://github.com/octocat/Hello-World/pull/1#discussion_r1",
     })),
   })),
+  updateComment: vi.fn(),
 }));
 
 vi.mock("./components/ChangedFilesPane", () => ({
@@ -65,8 +76,8 @@ vi.mock("./components/ChangedFilesPane", () => ({
 }));
 
 vi.mock("./components/PullRequestPanel", () => ({
-  PullRequestPanel: ({ onDraftComment }: { onDraftComment: (body: string) => void }) => (
-    <button onClick={() => onDraftComment("this needs tests")} type="button">
+  PullRequestPanel: ({ onDraftComment }: { onDraftComment: (body: string) => Promise<unknown> }) => (
+    <button onClick={() => void onDraftComment("this needs tests")} type="button">
       Draft without selection
     </button>
   ),
@@ -131,6 +142,7 @@ describe("App draft comments", () => {
 
     await userEvent.click(await screen.findByText("Draft without selection"));
 
+    await screen.findByText("Comment: this needs tests");
     expect(screen.queryByText("Pending: this needs tests")).not.toBeInTheDocument();
     expect(screen.getByText("Comment: this needs tests")).toBeInTheDocument();
     expect(screen.getByText("Location: README:L1-L1")).toBeInTheDocument();
@@ -144,6 +156,7 @@ describe("App draft comments", () => {
     await userEvent.click(await screen.findByText("Select README lines"));
     await userEvent.click(screen.getByText("Draft without selection"));
 
+    await screen.findByText("Comment: this needs tests");
     expect(screen.queryByText("Pending: this needs tests")).not.toBeInTheDocument();
     expect(screen.getByText("Comment: this needs tests")).toBeInTheDocument();
     expect(screen.getByText("Location: README:L1-L2")).toBeInTheDocument();
@@ -157,21 +170,12 @@ describe("App draft comments", () => {
 
     await userEvent.click(await screen.findByText("Select README lines"));
     await userEvent.click(screen.getByText("Draft without selection"));
+    await screen.findByText("Comment: this needs tests");
     await userEvent.click(screen.getByText("Publish comments"));
 
     expect(api.publishComments).toHaveBeenCalledWith({
       reviewId: "rev_1",
-      comments: [
-        expect.objectContaining({
-          body: "this needs tests",
-          status: "draft",
-          context: expect.objectContaining({
-            filePath: "README",
-            startLine: 1,
-            endLine: 2,
-          }),
-        }),
-      ],
+      commentIds: ["draft_1"],
     });
     expect(await screen.findByText("Status: published")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "GitHub comment" })).toHaveAttribute(
@@ -188,6 +192,7 @@ describe("App draft comments", () => {
     render(<App />);
 
     await userEvent.click(await screen.findByText("Draft without selection"));
+    await screen.findByText("Comment: this needs tests");
     await userEvent.click(screen.getByText("Publish comments"));
 
     expect(await screen.findByText("Status: failed")).toBeInTheDocument();

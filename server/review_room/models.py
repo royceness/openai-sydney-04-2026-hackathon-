@@ -128,6 +128,20 @@ class CreateFollowUpResponse(BaseModel):
     status: Literal["queued", "running", "complete", "failed"]
 
 
+class CreateCommentRequest(BaseModel):
+    body: str
+    context: CodeSelection
+
+
+class UpdateCommentRequest(BaseModel):
+    body: str
+
+
+class DeleteCommentResponse(BaseModel):
+    comment_id: str
+    status: Literal["deleted"]
+
+
 class PublishCommentRequest(BaseModel):
     id: str
     body: str
@@ -135,7 +149,7 @@ class PublishCommentRequest(BaseModel):
 
 
 class PublishCommentsRequest(BaseModel):
-    comments: list[PublishCommentRequest]
+    comment_ids: list[str]
 
 
 class PublishedComment(BaseModel):

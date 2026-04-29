@@ -20,9 +20,9 @@ export function PullRequestPanel({
   activeThreadId: string | null;
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
-  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
-  onDraftComment: (body: string) => { status: "created" | "selection-required" | "empty" };
-  onEditComment: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
+  onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
+  onDraftComment: (body: string) => Promise<{ status: "created" | "selection-required" | "empty" | "failed"; message?: string }>;
+  onEditComment: (commentId: string, body: string) => Promise<{ status: "updated" | "not-found" | "empty" | "failed"; message?: string }>;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   pr: PullRequestInfo;

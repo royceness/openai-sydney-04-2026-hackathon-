@@ -74,7 +74,7 @@ describe("AIWorkbench", () => {
   });
 
   it("renders and deletes local PR comment drafts", async () => {
-    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    const onDeleteComment = vi.fn(() => Promise.resolve({ status: "deleted" as const }));
     const onPublishComments = vi.fn(() => Promise.resolve());
     renderWorkbench({
       comments: [

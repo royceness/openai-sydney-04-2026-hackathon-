@@ -27,7 +27,7 @@ export function AIWorkbench({
   threadError: string | null;
   onActivateThread: (threadId: string) => void;
   onAsk: (utterance: string) => Promise<void>;
-  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
+  onDeleteComment: (commentId: string) => Promise<{ status: "deleted" | "not-found" | "failed"; message?: string }>;
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onPublishComments: () => Promise<void>;
@@ -147,7 +147,7 @@ export function AIWorkbench({
                           aria-label={`Delete draft comment at ${formatCommentLocation(comment.context)}`}
                           className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
                           disabled={comment.status === "publishing"}
-                          onClick={() => onDeleteComment(comment.id)}
+                          onClick={() => void onDeleteComment(comment.id)}
                           title="Delete draft comment"
                           type="button"
                         >
