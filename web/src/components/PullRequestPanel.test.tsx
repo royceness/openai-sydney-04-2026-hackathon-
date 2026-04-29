@@ -31,8 +31,12 @@ describe("PullRequestPanel", () => {
         onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
         onNavigateThread={() => undefined}
+        onSetReviewSubmissionBody={vi.fn()}
+        onSetReviewSubmissionEvent={vi.fn()}
+        onSubmitReview={vi.fn()}
         reviewId="rev_acme_review_room_247"
         selection={null}
+        submission={{ body: "", event: null }}
         threadStatusAnnouncement={null}
         threads={[]}
       />,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import Response
 
-from review_room.agent import CodexAppServerAgent
+from review_room.agent import CodeAgent, CodexAppServerAgentPool
 from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
 from review_room.init_threads import configured_init_thread_prompts, ensure_init_threads
@@ -34,8 +35,10 @@ from review_room.models import (
     PublishCommentsRequest,
     PublishCommentsResponse,
     ReviewSession,
+    ReviewSubmission,
     ReviewThread,
     UpdateCommentRequest,
+    UpdateReviewSubmissionRequest,
 )
 from review_room.prompting import build_follow_up_prompt, build_review_prompt
 from review_room.store import ReviewStore, stable_review_id
@@ -45,17 +48,21 @@ from review_room.threads import new_thread_id, run_review_thread, run_thread_fol
 store = ReviewStore()
 github = GitHubClient()
 checkout = RepoCheckoutService(store.workspace_dir)
-agent = CodexAppServerAgent()
+agent = CodexAppServerAgentPool()
 HOME_ENV_PATH = Path.home() / ".env"
+active_thread_tasks: set[tuple[str, str]] = set()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    warm_task = None
     if should_warm_codex_on_startup():
-        await agent.start()
+        warm_task = asyncio.create_task(agent.start())
     try:
         yield
     finally:
+        if warm_task is not None and not warm_task.done():
+            warm_task.cancel()
         await agent.close()
 
 
@@ -164,6 +171,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         files=files,
         threads=existing_session.threads if existing_session is not None else [],
         comments=merge_review_comments(existing_session.comments if existing_session is not None else [], imported_comments),
+        submission=existing_session.submission if existing_session is not None else ReviewSubmission(),
         repo_path=str(repo_path),
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
@@ -176,8 +184,8 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     store.save(session)
-    for thread in created_init_threads:
-        background_tasks.add_task(run_review_thread, store, agent, session.id, thread.id)
+    if created_init_threads:
+        background_tasks.add_task(schedule_review_threads, session.id, [thread.id for thread in created_init_threads])
 
     return CreateReviewResponse(
         review_id=session.id,
@@ -185,7 +193,29 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         files=session.files,
         threads=session.threads,
         comments=session.comments,
+        submission=session.submission,
     )
+
+
+async def schedule_review_threads(review_id: str, thread_ids: list[str]) -> None:
+    task_keys = [(review_id, thread_id) for thread_id in thread_ids]
+    runnable_thread_ids = []
+    active_keys = []
+    for task_key, thread_id in zip(task_keys, thread_ids, strict=True):
+        if task_key in active_thread_tasks:
+            continue
+        active_thread_tasks.add(task_key)
+        active_keys.append(task_key)
+        runnable_thread_ids.append(thread_id)
+    try:
+        await run_review_threads(store, agent, review_id, runnable_thread_ids)
+    finally:
+        for task_key in active_keys:
+            active_thread_tasks.discard(task_key)
+
+
+async def run_review_threads(store: ReviewStore, agent: CodeAgent, review_id: str, thread_ids: list[str]) -> None:
+    await asyncio.gather(*(run_review_thread(store, agent, review_id, thread_id) for thread_id in thread_ids))
 
 
 def merge_review_comments(existing_comments: list[DraftComment], imported_comments: list[DraftComment]) -> list[DraftComment]:
@@ -414,10 +444,22 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
         _validate_comment_request(session, comment.body, comment.context)
         comments_to_publish.append(comment)
 
-    published_comments = []
+    if request.event in {"comment", "request_changes"} and not request.body.strip():
+        raise HTTPException(status_code=400, detail="A discussion comment is required for this review action")
+
     try:
-        for comment in comments_to_publish:
-            published_comments.append(await github.create_pull_request_review_comment(session.pr, comment))
+        if request.event is None and not request.body.strip():
+            published_comments = [
+                await github.create_pull_request_review_comment(session.pr, comment) for comment in comments_to_publish
+            ]
+            submission = ReviewSubmission(body="", event=None, github_review_url=None)
+        else:
+            published_comments, submission = await github.create_pull_request_review(
+                session.pr,
+                comments_to_publish,
+                body=request.body,
+                event=request.event or "comment",
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GitHubError as exc:
@@ -428,9 +470,27 @@ async def publish_comments(review_id: str, request: PublishCommentsRequest) -> P
         DraftComment(**published_by_id[comment.id].model_dump()) if comment.id in published_by_id else comment
         for comment in session.comments
     ]
+    session.submission = submission
     session.updated_at = datetime.now(timezone.utc)
     store.save(session)
-    return PublishCommentsResponse(comments=published_comments)
+    return PublishCommentsResponse(comments=published_comments, submission=submission)
+
+
+@app.patch("/api/reviews/{review_id}/submission", response_model=ReviewSubmission)
+async def update_review_submission(review_id: str, request: UpdateReviewSubmissionRequest) -> ReviewSubmission:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    if request.body is not None:
+        session.submission.body = request.body.strip()
+    if request.event is not None:
+        session.submission.event = request.event
+    session.submission.github_review_url = None
+    session.updated_at = datetime.now(timezone.utc)
+    store.save(session)
+    return session.submission
 
 
 def new_comment_id() -> str:

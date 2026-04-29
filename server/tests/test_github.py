@@ -2,6 +2,7 @@ import pytest
 
 from review_room.github import (
     ParsedPullRequestUrl,
+    build_pull_request_review_payload,
     build_review_comment_payload,
     map_changed_file,
     map_pull_request,
@@ -129,6 +130,64 @@ def test_build_review_comment_payload_supports_old_side_single_line_with_selecti
         "line": 12,
         "side": "LEFT",
     }
+
+
+def test_build_pull_request_review_payload_batches_comments_body_and_decision() -> None:
+    pr = PullRequestInfo(
+        owner="acme",
+        repo="review-room",
+        number=247,
+        title="Improve diagram layout",
+        url="https://github.com/acme/review-room/pull/247",
+        base_ref="main",
+        head_ref="feature/diagram",
+        base_sha="abc",
+        head_sha="def",
+    )
+    comment = PublishCommentRequest(
+        id="draft_1",
+        body="Please add a regression test.",
+        context=CodeSelection(
+            filePath="src/review/diagram.ts",
+            side="new",
+            startLine=42,
+            endLine=44,
+            selectedText="function buildDiagram() {}",
+        ),
+    )
+
+    assert build_pull_request_review_payload(pr, [comment], "Please address this.", "request_changes") == {
+        "commit_id": "def",
+        "event": "REQUEST_CHANGES",
+        "body": "Please address this.",
+        "comments": [
+            {
+                "body": "Please add a regression test.",
+                "path": "src/review/diagram.ts",
+                "line": 44,
+                "side": "RIGHT",
+                "start_line": 42,
+                "start_side": "RIGHT",
+            }
+        ],
+    }
+
+
+def test_build_pull_request_review_payload_requires_body_for_request_changes() -> None:
+    pr = PullRequestInfo(
+        owner="acme",
+        repo="review-room",
+        number=247,
+        title="Improve diagram layout",
+        url="https://github.com/acme/review-room/pull/247",
+        base_ref="main",
+        head_ref="feature/diagram",
+        base_sha="abc",
+        head_sha="def",
+    )
+
+    with pytest.raises(ValueError, match="discussion comment"):
+        build_pull_request_review_payload(pr, [], "", "request_changes")
 
 
 def test_map_pull_request_review_comment_keeps_diff_location_and_github_metadata() -> None:

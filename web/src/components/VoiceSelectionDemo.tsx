@@ -9,7 +9,16 @@ import {
 import { z } from "zod";
 import { getFileContent } from "../api";
 import type { ThreadStatusAnnouncement } from "../App";
-import type { ChangedFile, CodeSelection, DraftComment, FileContentResponse, PullRequestInfo, ReviewThread } from "../types";
+import type {
+  ChangedFile,
+  CodeSelection,
+  DraftComment,
+  FileContentResponse,
+  PullRequestInfo,
+  ReviewSubmission,
+  ReviewSubmissionEvent,
+  ReviewThread,
+} from "../types";
 
 type VoicePopup = {
   title: string;
@@ -20,6 +29,7 @@ type DraftCommentResult = { status: "created" | "selection-required" | "empty" |
 type DraftCommentAtLocationResult = { status: "created" | "empty" | "failed"; message?: string };
 type EditCommentResult = { status: "updated" | "not-found" | "empty" | "failed"; message?: string };
 type DeleteCommentResult = { status: "deleted" | "not-found" | "failed"; message?: string };
+type SubmitReviewResult = { status: "submitted" | "needs-details" | "failed"; message?: string };
 
 type FileNavigationRequest =
   | {
@@ -50,9 +60,13 @@ export function VoiceSelectionDemo({
   onNavigateFile,
   onNavigateThread,
   pr,
+  onSetReviewSubmissionBody,
+  onSetReviewSubmissionEvent,
+  onSubmitReview,
   readFileContent = getFileContent,
   reviewId,
   selection,
+  submission,
   threadStatusAnnouncement,
   threads,
 }: {
@@ -69,9 +83,13 @@ export function VoiceSelectionDemo({
   onNavigateFile: (filePath: string) => void;
   onNavigateThread: (threadId: string) => void;
   pr: PullRequestInfo;
+  onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
+  onSetReviewSubmissionEvent: (event: ReviewSubmissionEvent) => Promise<ReviewSubmission>;
+  onSubmitReview: (body: string, event: ReviewSubmissionEvent | null) => Promise<void>;
   readFileContent?: typeof getFileContent;
   reviewId: string;
   selection: CodeSelection | null;
+  submission: ReviewSubmission;
   threadStatusAnnouncement: ThreadStatusAnnouncement | null;
   threads: ReviewThread[];
 }) {
@@ -92,9 +110,13 @@ export function VoiceSelectionDemo({
   const onNavigateFileRef = useRef(onNavigateFile);
   const onNavigateThreadRef = useRef(onNavigateThread);
   const prRef = useRef<PullRequestInfo>(pr);
+  const onSetReviewSubmissionBodyRef = useRef(onSetReviewSubmissionBody);
+  const onSetReviewSubmissionEventRef = useRef(onSetReviewSubmissionEvent);
+  const onSubmitReviewRef = useRef(onSubmitReview);
   const readFileContentRef = useRef(readFileContent);
   const reviewIdRef = useRef(reviewId);
   const selectionRef = useRef<CodeSelection | null>(selection);
+  const submissionRef = useRef<ReviewSubmission>(submission);
   const threadsRef = useRef<ReviewThread[]>(threads);
   const spokenAnnouncementIdsRef = useRef(new Set<number>());
   const lastLoggedAssistantSpeechRef = useRef<string | null>(null);
@@ -153,6 +175,18 @@ export function VoiceSelectionDemo({
   }, [pr]);
 
   useEffect(() => {
+    onSetReviewSubmissionBodyRef.current = onSetReviewSubmissionBody;
+  }, [onSetReviewSubmissionBody]);
+
+  useEffect(() => {
+    onSetReviewSubmissionEventRef.current = onSetReviewSubmissionEvent;
+  }, [onSetReviewSubmissionEvent]);
+
+  useEffect(() => {
+    onSubmitReviewRef.current = onSubmitReview;
+  }, [onSubmitReview]);
+
+  useEffect(() => {
     readFileContentRef.current = readFileContent;
   }, [readFileContent]);
 
@@ -163,6 +197,10 @@ export function VoiceSelectionDemo({
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    submissionRef.current = submission;
+  }, [submission]);
 
   useEffect(() => {
     threadsRef.current = threads;
@@ -422,6 +460,67 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
+        name: "set_review_discussion_comment",
+        description: "Set or replace the top-level GitHub review discussion comment body.",
+        parameters: z.object({
+          comment: z.string().describe("The exact top-level review discussion comment body."),
+        }),
+        execute: async ({ comment }) => {
+          const updated = await onSetReviewSubmissionBodyRef.current(comment);
+          setPopup({ title: "Review discussion", body: updated.body || "(empty)" });
+          return { ok: true, submission: summarizeSubmissionForVoice(updated) };
+        },
+      }),
+      defineVoiceTool({
+        name: "set_review_decision",
+        description: "Select whether the GitHub review should publish comments only, approve the PR, or request changes.",
+        parameters: z.object({
+          decision: z.enum(["comment", "approve", "request_changes"]).describe("comment publishes review comments without approval, approve approves the PR, and request_changes requests changes."),
+        }),
+        execute: async ({ decision }) => {
+          const updated = await onSetReviewSubmissionEventRef.current(decision);
+          setPopup({ title: "Review decision", body: reviewDecisionText(updated.event) });
+          return { ok: true, submission: summarizeSubmissionForVoice(updated) };
+        },
+      }),
+      defineVoiceTool({
+        name: "get_review_submission_state",
+        description: "Read the current GitHub review submission state, including selected decision, discussion comment body, and draft comment count.",
+        parameters: z.object({}),
+        execute: () => {
+          const state = summarizeSubmissionForVoice(submissionRef.current);
+          const publishableComments = commentsRef.current.filter((comment) => comment.status === "draft" || comment.status === "failed");
+          const body = `Decision: ${reviewDecisionText(submissionRef.current.event)}\nDiscussion: ${submissionRef.current.body || "(empty)"}\nInline drafts: ${publishableComments.length}`;
+          setPopup({ title: "Review submission", body });
+          return { ok: true, submission: state, publishableCommentCount: publishableComments.length };
+        },
+      }),
+      defineVoiceTool({
+        name: "submit_github_review",
+        description: "Submit the current GitHub review. If the decision or discussion comment is missing, prompt the user for the missing review details instead of submitting.",
+        parameters: z.object({}),
+        execute: async () => {
+          const result = await submitGithubReviewFromVoice({
+            comments: commentsRef.current,
+            onSubmitReview: onSubmitReviewRef,
+            submission: submissionRef.current,
+          });
+          if (result.status === "needs-details") {
+            const message =
+              result.message ??
+              "Are you approving or requesting changes? Also do you want to leave a discussion comment too?";
+            setPopup({ title: "Review details needed", body: message });
+            return { ok: true, status: "needs-details", message };
+          }
+          if (result.status === "failed") {
+            setPopup({ title: "GitHub review", body: result.message ?? "Failed to submit review." });
+            return { ok: false, status: "failed", message: result.message };
+          }
+          setPopup({ title: "GitHub review submitted", body: "Submitted the review to GitHub." });
+          return { ok: true, status: "submitted" };
+        },
+      }),
+      defineVoiceTool({
         name: "list_pr_files",
         description: "List the files changed in the pull request, including path, status, additions, deletions, and whether a patch is available.",
         parameters: z.object({}),
@@ -508,7 +607,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, check auto-generated initial analysis threads for high-level PR context, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. The auto-generated initial analysis threads have source init and are: PR summary, Tests audit, Architecture coherence report, Bug finder, and Doc validator. They may take some time to complete. Before answering a high-level question like \"give me a summary of what's changed in this PR\", \"give me an overview\", \"where should I dive in\", \"what changed\", or \"what should I look at first\", you MUST call read_initial_analysis_thread with category pr-summary. If that thread is found, you MUST consider its Markdown before answering. Before answering a general tests or test coverage question, you MUST call read_initial_analysis_thread with category tests-audit. Before answering a general architecture, design, structure, or integration question, you MUST call read_initial_analysis_thread with category architecture-coherence-report. Before answering a general bug, risk, regression, edge case, or failure-mode question, you MUST call read_initial_analysis_thread with category bug-finder. Before answering a general docs, README, comment, or documentation question, you MUST call read_initial_analysis_thread with category doc-validator. For general PR questions, bias toward reading those threads first with read_initial_analysis_thread. If a user asks a question that might be answered by the initial analysis while the relevant thread is queued or running, try to answer from the PR description and changed files available in get_review_room_context or list_pr_files, and say that after the initial analysis finishes you can give a deeper answer. Use thread status fields to tell whether an initial analysis thread is queued, running, complete, or failed. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. When the user asks to add PR comments from testing gaps or findings in a Codex thread, first read the named thread with get_review_thread_text or read_initial_analysis_thread. Use the file and line numbers from that thread when they point to files changed in this PR, and call draft_pr_comment_at_location for each comment. If a thread line number refers to a file not changed in this PR, do not attach a comment to that unchanged file; use list_pr_files, summarize_changed_lines, and read_pr_file_range to find the relevant changed PR logic that is not tested, then call draft_pr_comment_at_location on that changed location. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here without giving a specific location; extract the requested comment text into the comment parameter. Call draft_pr_comment_at_location when the user asks to draft a PR comment at a specific file and line or when converting thread findings into PR comments with cited locations. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this PR, this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, asks for thread names, or asks whether initial analysis is still processing. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, search the existing and auto-generated initial analysis threads first unless the user asks for a fresh investigation; if those threads do not answer it, call ask_general_question so Codex can inspect the repository. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
+        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, check auto-generated initial analysis threads for high-level PR context, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. The auto-generated initial analysis threads have source init and are: PR summary, Tests audit, Architecture coherence report, Bug finder, and Doc validator. They may take some time to complete. Before answering a high-level question like \"give me a summary of what's changed in this PR\", \"give me an overview\", \"where should I dive in\", \"what changed\", or \"what should I look at first\", you MUST call read_initial_analysis_thread with category pr-summary. If that thread is found, you MUST consider its Markdown before answering. Before answering a general tests or test coverage question, you MUST call read_initial_analysis_thread with category tests-audit. Before answering a general architecture, design, structure, or integration question, you MUST call read_initial_analysis_thread with category architecture-coherence-report. Before answering a general bug, risk, regression, edge case, or failure-mode question, you MUST call read_initial_analysis_thread with category bug-finder. Before answering a general docs, README, comment, or documentation question, you MUST call read_initial_analysis_thread with category doc-validator. For general PR questions, bias toward reading those threads first with read_initial_analysis_thread, list_review_threads, search_review_threads, get_review_thread_text, or get_review_room_context. If a user asks a question that might be answered by the initial analysis while the relevant thread is queued or running, try to answer from the PR description and changed files available in get_review_room_context or list_pr_files, and say that after the initial analysis finishes you can give a deeper answer. Use thread status fields to tell whether an initial analysis thread is queued, running, complete, or failed. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. When the user asks to add PR comments from testing gaps or findings in a Codex thread, first read the named thread with get_review_thread_text or read_initial_analysis_thread. Use the file and line numbers from that thread when they point to files changed in this PR, and call draft_pr_comment_at_location for each comment. If a thread line number refers to a file not changed in this PR, do not attach a comment to that unchanged file; use list_pr_files, summarize_changed_lines, and read_pr_file_range to find the relevant changed PR logic that is not tested, then call draft_pr_comment_at_location on that changed location. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here without giving a specific location; extract the requested comment text into the comment parameter. Call draft_pr_comment_at_location when the user asks to draft a PR comment at a specific file and line or when converting thread findings into PR comments with cited locations. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call set_review_discussion_comment when the user asks to set, write, change, or edit the top-level review discussion comment. Call set_review_decision when the user says they are approving, requesting changes, or just publishing comments. Call get_review_submission_state when the user asks what review will be submitted. Call submit_github_review when the user asks to submit, publish, send, or post the GitHub review; if the tool reports missing details, ask exactly: Are you approving or requesting changes? Also do you want to leave a discussion comment too? Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this PR, this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, asks for thread names, or asks whether initial analysis is still processing. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, search the existing and auto-generated initial analysis threads first unless the user asks for a fresh investigation; if those threads do not answer it, call ask_general_question so Codex can inspect the repository. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
       audio: { output: { voice: "marin" } },
       onEvent: (event) => {
         logVoiceTranscript(event, {
@@ -756,6 +855,55 @@ function commentLocationText(comment: Pick<DraftCommentVoiceSummary, "filePath" 
   }
   const lineLabel = comment.startLine === comment.endLine ? `L${comment.startLine}` : `L${comment.startLine}-L${comment.endLine}`;
   return `${comment.filePath}:${lineLabel}`;
+}
+
+function summarizeSubmissionForVoice(submission: ReviewSubmission) {
+  return {
+    body: submission.body,
+    decision: submission.event,
+    githubReviewUrl: submission.github_review_url ?? null,
+  };
+}
+
+function reviewDecisionText(event: ReviewSubmissionEvent | null) {
+  if (event === "approve") {
+    return "approve";
+  }
+  if (event === "request_changes") {
+    return "request changes";
+  }
+  if (event === "comment") {
+    return "publish comments only";
+  }
+  return "not selected";
+}
+
+export async function submitGithubReviewFromVoice({
+  comments,
+  onSubmitReview,
+  submission,
+}: {
+  comments: DraftComment[];
+  onSubmitReview: MutableRefObject<(body: string, event: ReviewSubmissionEvent | null) => Promise<void>>;
+  submission: ReviewSubmission;
+}): Promise<SubmitReviewResult> {
+  const publishableComments = comments.filter((comment) => comment.status === "draft" || comment.status === "failed");
+  const body = submission.body.trim();
+  if (!submission.event || !body) {
+    return {
+      status: "needs-details",
+      message: "Are you approving or requesting changes? Also do you want to leave a discussion comment too?",
+    };
+  }
+  if (publishableComments.length === 0 && !body && submission.event !== "approve") {
+    return { status: "needs-details", message: "There is nothing to submit yet." };
+  }
+  try {
+    await onSubmitReview.current(body, submission.event);
+    return { status: "submitted" };
+  } catch (caught) {
+    return { status: "failed", message: caught instanceof Error ? caught.message : "Failed to submit review." };
+  }
 }
 
 export type FileNavigationResult =

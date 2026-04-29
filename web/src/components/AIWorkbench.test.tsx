@@ -24,8 +24,11 @@ function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {})
       onFollowUp={vi.fn()}
       onNavigateReference={vi.fn()}
       onPublishComments={vi.fn()}
+      onSetReviewSubmissionBody={vi.fn()}
+      onSetReviewSubmissionEvent={vi.fn()}
       pendingCommentBody={null}
       selection={null}
+      submission={{ body: "", event: null }}
       threadError={null}
       threadNavigationRequest={null}
       threads={[]}
@@ -104,8 +107,8 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("README:L1")).toBeInTheDocument();
     expect(screen.getByText("this needs tests")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /Publish/ }));
-    expect(onPublishComments).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: /^Publish$/ }));
+    expect(onPublishComments).toHaveBeenCalledWith("", null);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete draft comment at README:L1" }));
 
@@ -132,7 +135,7 @@ describe("AIWorkbench", () => {
       ],
     });
 
-    expect(screen.getByRole("button", { name: /Publish/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Publish$/ })).toBeDisabled();
     expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/acme/review-room/pull/247#discussion_r1",
@@ -227,8 +230,11 @@ describe("AIWorkbench", () => {
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onSetReviewSubmissionBody={vi.fn()}
+        onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
+        submission={{ body: "", event: null }}
         threadError={null}
         threadNavigationRequest={null}
         threads={[
@@ -247,6 +253,23 @@ describe("AIWorkbench", () => {
 
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Updated streamed body.")).not.toBeInTheDocument();
+  });
+
+  it("edits review discussion text and selects a review decision", async () => {
+    const onSetReviewSubmissionBody = vi.fn(async (body: string) => ({ body, event: null }));
+    const onSetReviewSubmissionEvent = vi.fn(async () => ({ body: "Looks good.", event: "approve" as const }));
+    renderWorkbench({
+      onSetReviewSubmissionBody,
+      onSetReviewSubmissionEvent,
+      submission: { body: "", event: null },
+    });
+
+    await userEvent.type(screen.getByLabelText("Discussion comment"), "Looks good.");
+    fireEvent.blur(screen.getByLabelText("Discussion comment"));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(onSetReviewSubmissionBody).toHaveBeenCalledWith("Looks good.");
+    expect(onSetReviewSubmissionEvent).toHaveBeenCalledWith("approve");
   });
 
   it("parses clickable code references", () => {
@@ -316,8 +339,11 @@ describe("AIWorkbench", () => {
         onFollowUp={onFollowUp}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onSetReviewSubmissionBody={vi.fn()}
+        onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
+        submission={{ body: "", event: null }}
         threadError={null}
         threadNavigationRequest={null}
         threads={[thread]}
@@ -373,8 +399,11 @@ describe("AIWorkbench", () => {
         onFollowUp={vi.fn()}
         onNavigateReference={vi.fn()}
         onPublishComments={vi.fn()}
+        onSetReviewSubmissionBody={vi.fn()}
+        onSetReviewSubmissionEvent={vi.fn()}
         pendingCommentBody={null}
         selection={null}
+        submission={{ body: "", event: null }}
         threadError={null}
         threadNavigationRequest={{ threadId: "thr_1", requestId: 1 }}
         threads={[thread]}

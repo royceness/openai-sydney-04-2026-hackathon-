@@ -1,6 +1,8 @@
+import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from review_room import main
@@ -14,12 +16,14 @@ from review_room.models import (
     PublishedComment,
     PublishCommentRequest,
     PullRequestInfo,
+    ReviewSubmission,
 )
 from review_room.store import ReviewStore
 
 
 class FakeGitHubClient:
     published_comments: list[PublishCommentRequest] = []
+    submitted_reviews: list[dict[str, object]] = []
 
     async def fetch_pull_request(self, parsed: ParsedPullRequestUrl):
         return (
@@ -80,6 +84,28 @@ class FakeGitHubClient:
             github_comment_url=f"https://github.com/{pr.owner}/{pr.repo}/pull/{pr.number}#discussion_r1",
         )
 
+    async def create_pull_request_review(
+        self,
+        pr: PullRequestInfo,
+        comments: list[PublishCommentRequest],
+        body: str,
+        event: str,
+    ) -> tuple[list[PublishedComment], ReviewSubmission]:
+        self.submitted_reviews.append({"comments": comments, "body": body, "event": event})
+        review_url = f"https://github.com/{pr.owner}/{pr.repo}/pull/{pr.number}#pullrequestreview-1"
+        return (
+            [
+                PublishedComment(
+                    id=comment.id,
+                    body=comment.body,
+                    context=comment.context,
+                    github_comment_url=review_url,
+                )
+                for comment in comments
+            ],
+            ReviewSubmission(body=body.strip(), event=event, github_review_url=review_url),
+        )
+
 
 class FakeCheckoutService:
     async def checkout_pull_request(self, parsed: ParsedPullRequestUrl) -> Path:
@@ -114,6 +140,24 @@ class FakeAgent:
             await on_delta("The follow-up answer cites ")
             await on_delta("the same issue.")
         return AgentResult(codex_thread_id=codex_thread_id, markdown="The follow-up answer cites the same issue.")
+
+
+class ConcurrentFakeAgent:
+    def __init__(self) -> None:
+        self.running = 0
+        self.max_running = 0
+
+    async def run_thread(self, repo_path: str, title: str, prompt: str, on_delta=None) -> AgentResult:
+        self.running += 1
+        self.max_running = max(self.max_running, self.running)
+        await asyncio.sleep(0.01)
+        if on_delta is not None:
+            await on_delta(f"{title} response")
+        self.running -= 1
+        return AgentResult(codex_thread_id=f"codex-{title}", markdown=f"{title} response")
+
+    async def continue_thread(self, repo_path: str, codex_thread_id: str, prompt: str, on_delta=None) -> AgentResult:
+        return AgentResult(codex_thread_id=codex_thread_id, markdown="follow-up")
 
 
 class FakeAsyncClient:
@@ -196,6 +240,27 @@ def test_tests_audit_prompt_requests_changed_pr_gap_locations() -> None:
     assert "best represents the untested behavior introduced by this PR" in tests_audit.utterance
 
 
+def test_create_review_runs_default_init_threads_concurrently(tmp_path: Path, monkeypatch) -> None:
+    concurrent_agent = ConcurrentFakeAgent()
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", concurrent_agent)
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 200
+    assert concurrent_agent.max_running == len(DEFAULT_INIT_THREAD_PROMPTS)
+    session_threads = client.get("/api/reviews/rev_acme_review_room_247").json()["threads"]
+    completed_init_threads = [thread for thread in session_threads if thread["source"] == "init"]
+    assert [thread["status"] for thread in completed_init_threads] == ["complete"] * len(DEFAULT_INIT_THREAD_PROMPTS)
+    assert [thread["markdown"] for thread in completed_init_threads] == [
+        f"{prompt.title} response" for prompt in DEFAULT_INIT_THREAD_PROMPTS
+    ]
+
+
 def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
@@ -213,6 +278,35 @@ def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path,
     assert [thread["title"] for thread in session_threads if thread["source"] == "init"] == [
         prompt.title for prompt in DEFAULT_INIT_THREAD_PROMPTS
     ]
+
+
+@pytest.mark.parametrize("stale_status", ["failed", "queued", "running"])
+def test_create_review_retries_non_complete_init_threads_on_reload(tmp_path: Path, monkeypatch, stale_status: str) -> None:
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    session = main.store.get(review_id)
+    stale_thread = next(thread for thread in session.threads if thread.source == "init")
+    stale_thread.status = stale_status
+    stale_thread.error = "Separator is not found, and chunk exceed the limit" if stale_status == "failed" else None
+    stale_thread.markdown = None
+    stale_thread.codex_thread_id = None
+    main.store.save(session)
+
+    reload_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert reload_response.status_code == 200
+    session_threads = client.get(f"/api/reviews/{review_id}").json()["threads"]
+    retried_thread = next(thread for thread in session_threads if thread["id"] == stale_thread.id)
+    assert retried_thread["status"] == "complete"
+    assert retried_thread["error"] is None
+    assert retried_thread["markdown"]
 
 
 def test_create_review_uses_configured_init_threads(tmp_path: Path, monkeypatch) -> None:
@@ -396,9 +490,71 @@ def test_publish_comments_posts_to_github_and_persists_urls(tmp_path: Path, monk
     assert publish_response.status_code == 200
     assert publish_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
     assert fake_github.published_comments[0].body == "Please add a regression test."
+
+
+def test_update_review_submission_persists_body_and_decision(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+
+    body_response = client.patch(f"/api/reviews/{review_id}/submission", json={"body": "Looks good."})
+    event_response = client.patch(f"/api/reviews/{review_id}/submission", json={"event": "approve"})
+
+    assert body_response.status_code == 200
+    assert body_response.json()["body"] == "Looks good."
+    assert event_response.status_code == 200
+    assert event_response.json() == {"body": "Looks good.", "event": "approve", "github_review_url": None}
+    assert client.get(f"/api/reviews/{review_id}").json()["submission"]["event"] == "approve"
+
+
+def test_publish_comments_can_submit_github_review_with_decision_and_body(tmp_path: Path, monkeypatch) -> None:
+    fake_github = FakeGitHubClient()
+    fake_github.published_comments = []
+    fake_github.submitted_reviews = []
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", fake_github)
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    comment_response = client.post(
+        f"/api/reviews/{review_id}/comments",
+        json={
+            "body": "Please add a regression test.",
+            "context": {
+                "filePath": "src/review/diagram.ts",
+                "side": "new",
+                "startLine": 1,
+                "endLine": 1,
+                "selectedText": "new",
+            },
+        },
+    )
+    comment_id = comment_response.json()["id"]
+
+    publish_response = client.post(
+        f"/api/reviews/{review_id}/comments/publish",
+        json={"comment_ids": [comment_id], "body": "Please address this before merge.", "event": "request_changes"},
+    )
+
+    assert publish_response.status_code == 200
+    body = publish_response.json()
+    assert body["submission"] == {
+        "body": "Please address this before merge.",
+        "event": "request_changes",
+        "github_review_url": "https://github.com/acme/review-room/pull/247#pullrequestreview-1",
+    }
+    assert body["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#pullrequestreview-1"
+    assert fake_github.submitted_reviews[0]["event"] == "request_changes"
+    assert fake_github.submitted_reviews[0]["body"] == "Please address this before merge."
     session_response = client.get(f"/api/reviews/{review_id}")
     assert session_response.json()["comments"][0]["status"] == "published"
-    assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#discussion_r1"
+    assert session_response.json()["comments"][0]["github_comment_url"] == "https://github.com/acme/review-room/pull/247#pullrequestreview-1"
 
 
 def test_create_comment_rejects_unknown_changed_file(tmp_path: Path, monkeypatch) -> None:

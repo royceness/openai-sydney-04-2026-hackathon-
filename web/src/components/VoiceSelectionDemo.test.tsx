@@ -14,6 +14,7 @@ import {
   resolveThreadNavigation,
   searchThreadsByText,
   selectedLocationMessage,
+  submitGithubReviewFromVoice,
   summarizeChangedLines,
   VoiceSelectionDemo,
 } from "./VoiceSelectionDemo";
@@ -129,6 +130,9 @@ function renderVoiceSelectionDemo({
   onNavigateFile = vi.fn(),
   onNavigateThread = vi.fn(),
   pr = pullRequestInfo,
+  onSetReviewSubmissionBody = vi.fn(async (body: string) => ({ body, event: null })),
+  onSetReviewSubmissionEvent = vi.fn(async (event) => ({ body: "", event })),
+  onSubmitReview = vi.fn(() => Promise.resolve()),
   readFileContent = vi.fn(() =>
     Promise.resolve({
       file_path: "src/review/diagram.ts",
@@ -140,6 +144,7 @@ function renderVoiceSelectionDemo({
   ),
   reviewId = "rev_acme_review_room_247",
   selection = selectedCode,
+  submission = { body: "", event: null },
   threadStatusAnnouncement = null,
   threads = [completedThread],
 }: {
@@ -159,6 +164,11 @@ function renderVoiceSelectionDemo({
   onNavigateFile?: (filePath: string) => void;
   onNavigateThread?: (threadId: string) => void;
   pr?: PullRequestInfo;
+  onSetReviewSubmissionBody?: (body: string) => Promise<{ body: string; event: "comment" | "approve" | "request_changes" | null }>;
+  onSetReviewSubmissionEvent?: (
+    event: "comment" | "approve" | "request_changes",
+  ) => Promise<{ body: string; event: "comment" | "approve" | "request_changes" | null }>;
+  onSubmitReview?: (body: string, event: "comment" | "approve" | "request_changes" | null) => Promise<void>;
   readFileContent?: (request: {
     reviewId: string;
     filePath: string;
@@ -174,6 +184,7 @@ function renderVoiceSelectionDemo({
   }>;
   reviewId?: string;
   selection?: CodeSelection | null;
+  submission?: { body: string; event: "comment" | "approve" | "request_changes" | null; github_review_url?: string | null };
   threadStatusAnnouncement?: {
     requestId: number;
     threadId: string;
@@ -196,9 +207,13 @@ function renderVoiceSelectionDemo({
       onNavigateFile={onNavigateFile}
       onNavigateThread={onNavigateThread}
       pr={pr}
+      onSetReviewSubmissionBody={onSetReviewSubmissionBody}
+      onSetReviewSubmissionEvent={onSetReviewSubmissionEvent}
+      onSubmitReview={onSubmitReview}
       readFileContent={readFileContent}
       reviewId={reviewId}
       selection={selection}
+      submission={submission}
       threadStatusAnnouncement={threadStatusAnnouncement}
       threads={threads}
     />,
@@ -349,6 +364,37 @@ describe("VoiceSelectionDemo", () => {
         createdAt: "2026-04-29T00:01:00Z",
       },
     ]);
+  });
+
+  it("prompts for review details before submitting from voice", async () => {
+    const onSubmitReview = { current: vi.fn(() => Promise.resolve()) };
+
+    await expect(
+      submitGithubReviewFromVoice({
+        comments: draftComments,
+        onSubmitReview,
+        submission: { body: "", event: null },
+      }),
+    ).resolves.toEqual({
+      status: "needs-details",
+      message: "Are you approving or requesting changes? Also do you want to leave a discussion comment too?",
+    });
+
+    expect(onSubmitReview.current).not.toHaveBeenCalled();
+  });
+
+  it("submits the selected review decision from voice when details are present", async () => {
+    const onSubmitReview = { current: vi.fn(() => Promise.resolve()) };
+
+    await expect(
+      submitGithubReviewFromVoice({
+        comments: draftComments,
+        onSubmitReview,
+        submission: { body: "Looks good.", event: "approve" },
+      }),
+    ).resolves.toEqual({ status: "submitted" });
+
+    expect(onSubmitReview.current).toHaveBeenCalledWith("Looks good.", "approve");
   });
 
   it("lists loaded review thread ids and names for voice", () => {

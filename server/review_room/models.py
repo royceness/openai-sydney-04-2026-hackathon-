@@ -73,8 +73,18 @@ class DraftComment(BaseModel):
     author: str | None = None
     github_comment_id: int | None = None
     github_comment_url: str | None = None
+    error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+ReviewSubmissionEvent = Literal["comment", "approve", "request_changes"]
+
+
+class ReviewSubmission(BaseModel):
+    body: str = ""
+    event: ReviewSubmissionEvent | None = None
+    github_review_url: str | None = None
 
 
 class ReviewSession(BaseModel):
@@ -85,6 +95,7 @@ class ReviewSession(BaseModel):
     files: list[ChangedFile]
     threads: list[ReviewThread] = Field(default_factory=list)
     comments: list[DraftComment] = Field(default_factory=list)
+    submission: ReviewSubmission = Field(default_factory=ReviewSubmission)
     repo_path: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -96,6 +107,7 @@ class CreateReviewResponse(BaseModel):
     files: list[ChangedFile]
     threads: list[ReviewThread]
     comments: list[DraftComment] = Field(default_factory=list)
+    submission: ReviewSubmission = Field(default_factory=ReviewSubmission)
 
 
 class FileDiffResponse(BaseModel):
@@ -155,6 +167,8 @@ class PublishCommentRequest(BaseModel):
 
 class PublishCommentsRequest(BaseModel):
     comment_ids: list[str]
+    body: str = ""
+    event: ReviewSubmissionEvent | None = None
 
 
 class PublishedComment(BaseModel):
@@ -167,3 +181,9 @@ class PublishedComment(BaseModel):
 
 class PublishCommentsResponse(BaseModel):
     comments: list[PublishedComment]
+    submission: ReviewSubmission = Field(default_factory=ReviewSubmission)
+
+
+class UpdateReviewSubmissionRequest(BaseModel):
+    body: str | None = None
+    event: ReviewSubmissionEvent | None = None

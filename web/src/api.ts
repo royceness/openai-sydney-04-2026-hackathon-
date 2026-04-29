@@ -8,6 +8,8 @@ import type {
   FileContentResponse,
   FileDiffResponse,
   PublishCommentsResponse,
+  ReviewSubmission,
+  ReviewSubmissionEvent,
   ReviewSession,
   ReviewThread,
 } from "./types";
@@ -181,14 +183,35 @@ export async function deleteComment({
 export async function publishComments({
   reviewId,
   commentIds,
+  body,
+  event,
 }: {
   reviewId: string;
   commentIds: string[];
+  body: string;
+  event: ReviewSubmissionEvent | null;
 }): Promise<PublishCommentsResponse> {
   const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/comments/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ comment_ids: commentIds }),
+    body: JSON.stringify({ comment_ids: commentIds, body, event }),
   });
   return readJson<PublishCommentsResponse>(response);
+}
+
+export async function updateReviewSubmission({
+  reviewId,
+  body,
+  event,
+}: {
+  reviewId: string;
+  body?: string;
+  event?: ReviewSubmissionEvent;
+}): Promise<ReviewSubmission> {
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/submission`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body, event }),
+  });
+  return readJson<ReviewSubmission>(response);
 }

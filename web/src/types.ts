@@ -42,6 +42,7 @@ export type ReviewSession = {
   files: ChangedFile[];
   threads: ReviewThread[];
   comments: DraftComment[];
+  submission: ReviewSubmission;
   repo_path?: string | null;
   created_at: string;
   updated_at: string;
@@ -53,6 +54,7 @@ export type CreateReviewResponse = {
   files: ChangedFile[];
   threads: ReviewThread[];
   comments: DraftComment[];
+  submission: ReviewSubmission;
 };
 
 export type FileDiffResponse = {
@@ -102,10 +104,19 @@ export type DraftComment = {
   error?: string | null;
 };
 
+export type ReviewSubmissionEvent = "comment" | "approve" | "request_changes";
+
+export type ReviewSubmission = {
+  body: string;
+  event: ReviewSubmissionEvent | null;
+  github_review_url?: string | null;
+};
+
 export type ReviewComment = DraftComment;
 
 export type PublishCommentsResponse = {
   comments: PublishedComment[];
+  submission: ReviewSubmission;
 };
 
 export type PublishedComment = {

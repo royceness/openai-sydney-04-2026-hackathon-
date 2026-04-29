@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewThread } from "./types";
+import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewSubmission, ReviewThread } from "./types";
 
 const pr: PullRequestInfo = {
   owner: "octocat",
@@ -49,6 +49,7 @@ vi.mock("./api", () => ({
     files,
     threads: [],
     comments: [],
+    submission: { body: "", event: null },
   })),
   createThread: vi.fn(),
   deleteComment: vi.fn(async () => ({ comment_id: "draft_1", status: "deleted" as const })),
@@ -63,6 +64,16 @@ vi.mock("./api", () => ({
       status: "published" as const,
       github_comment_url: "https://github.com/octocat/Hello-World/pull/1#discussion_r1",
     })),
+    submission: {
+      body: "",
+      event: null,
+      github_review_url: null,
+    },
+  })),
+  updateReviewSubmission: vi.fn(async ({ body = "", event = null }: { body?: string; event?: ReviewSubmission["event"] }) => ({
+    body,
+    event,
+    github_review_url: null,
   })),
   updateComment: vi.fn(),
 }));
@@ -122,14 +133,14 @@ vi.mock("./components/AIWorkbench", () => ({
   }: {
     commentError: string | null;
     comments: DraftComment[];
-    onPublishComments: () => Promise<void>;
+    onPublishComments: (body: string, event: ReviewSubmission["event"]) => Promise<void>;
     pendingCommentBody: string | null;
     threads: ReviewThread[];
   }) => (
     <div>
       {pendingCommentBody ? <div>Pending: {pendingCommentBody}</div> : null}
       {commentError ? <div>Comment error: {commentError}</div> : null}
-      <button onClick={() => void onPublishComments()} type="button">
+      <button onClick={() => void onPublishComments("", null)} type="button">
         Publish comments
       </button>
       {comments.map((comment) => (
@@ -209,6 +220,8 @@ describe("App draft comments", () => {
     expect(api.publishComments).toHaveBeenCalledWith({
       reviewId: "rev_1",
       commentIds: ["draft_1"],
+      body: "",
+      event: null,
     });
     expect(await screen.findByText("Status: published")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "GitHub comment" })).toHaveAttribute(
