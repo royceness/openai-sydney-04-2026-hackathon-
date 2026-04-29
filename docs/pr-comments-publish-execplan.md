@@ -19,7 +19,7 @@ Review Room can already draft local pull request comments from typed or voice in
 - [x] (2026-04-29) Commit, push the branch, and open a draft PR for live testing.
 - [x] (2026-04-29) Add filesystem-backed backend persistence APIs for draft PR comment create, edit, and delete.
 - [x] (2026-04-29) Switch the frontend draft/edit/delete flow to use persisted backend comments instead of frontend-only state.
-- [ ] Commit and push the persistence update.
+- [x] (2026-04-29) Commit and push the persistence update.
 - [ ] Test publishing a comment against the draft PR.
 
 ## Surprises & Discoveries
