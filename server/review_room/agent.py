@@ -28,6 +28,15 @@ class CodeAgent(Protocol):
     ) -> AgentResult:
         pass
 
+    async def continue_thread(
+        self,
+        repo_path: str,
+        codex_thread_id: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
+        pass
+
 
 class CodexAppServerAgent:
     model = "gpt-5.3-codex-spark"
@@ -56,6 +65,23 @@ class CodexAppServerAgent:
             thread_response = await self._request("thread/start", self._thread_start_params(str(repo)))
             codex_thread_id = thread_response["result"]["thread"]["id"]
 
+            await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
+            markdown = await self._collect_turn(codex_thread_id, on_delta)
+            return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
+
+    async def continue_thread(
+        self,
+        repo_path: str,
+        codex_thread_id: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
+        repo = Path(repo_path)
+        if not repo.exists():
+            raise AgentError(f"Repo path does not exist: {repo_path}")
+
+        async with self._lock:
+            await self._ensure_started()
             await self._request("turn/start", self._turn_start_params(codex_thread_id, str(repo), prompt))
             markdown = await self._collect_turn(codex_thread_id, on_delta)
             return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)

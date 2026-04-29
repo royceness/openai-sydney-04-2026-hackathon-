@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview } from "./api";
+import { createFollowUp, createReview, createThread, getBootstrapPrUrl, getFileDiff, getReview } from "./api";
 import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
@@ -25,12 +25,15 @@ export default function App() {
   const [selection, setSelection] = useState<CodeSelection | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
 
   const loadReview = useCallback(async (prUrl: string) => {
     setLoadState("loading");
     setError(null);
     setSelection(null);
+    setTargetReference(null);
+    setActiveThreadId(null);
     try {
       const created = await createReview(prUrl);
       const nextReview = {
@@ -174,6 +177,34 @@ export default function App() {
     setTargetReference(reference);
   }, []);
 
+  const handleFollowUp = useCallback(async (threadId: string, utterance: string, source: "voice" | "manual" = "manual") => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      return;
+    }
+    setThreadError(null);
+    try {
+      const response = await createFollowUp({
+        reviewId: context.reviewId,
+        threadId,
+        source,
+        utterance,
+      });
+      const session = await getReview(context.reviewId);
+      setReview({
+        reviewId: session.id,
+        pr: session.pr,
+        files: session.files,
+        threads: session.threads,
+      });
+      if (response.status === "failed") {
+        setThreadError("Follow-up failed to start");
+      }
+    } catch (caught) {
+      setThreadError(caught instanceof Error ? caught.message : "Failed to create follow-up");
+    }
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -199,14 +230,17 @@ export default function App() {
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
         <PullRequestPanel
           activeFile={activeFile}
+          activeThreadId={activeThreadId}
           files={review.files}
           onAsk={(utterance) => handleAsk(utterance, "voice")}
+          onFollowUp={(threadId, utterance) => handleFollowUp(threadId, utterance, "voice")}
           onNavigateFile={(filePath) => {
             setActiveFile(filePath);
             setSelection(null);
           }}
           pr={review.pr}
           selection={selection}
+          threads={review.threads}
         />
         <DiffPane
           filePath={activeFile}
@@ -218,10 +252,13 @@ export default function App() {
         />
       </main>
       <AIWorkbench
+        activeThreadId={activeThreadId}
         threads={review.threads}
         selection={selection}
         threadError={threadError}
+        onActivateThread={setActiveThreadId}
         onAsk={handleAsk}
+        onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
       />
     </div>

@@ -1,20 +1,26 @@
-import type { ChangedFile, CodeSelection, PullRequestInfo } from "../types";
+import type { ChangedFile, CodeSelection, PullRequestInfo, ReviewThread } from "../types";
 import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 
 export function PullRequestPanel({
   activeFile,
+  activeThreadId,
   files,
   onAsk,
+  onFollowUp,
   onNavigateFile,
   pr,
   selection,
+  threads,
 }: {
   activeFile: string | null;
+  activeThreadId: string | null;
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
+  onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   pr: PullRequestInfo;
   selection: CodeSelection | null;
+  threads: ReviewThread[];
 }) {
   return (
     <section className="border-b border-slate-800 bg-[#0b0e14] p-5">
@@ -36,10 +42,13 @@ export function PullRequestPanel({
         </div>
         <VoiceSelectionDemo
           activeFile={activeFile}
+          activeThreadId={activeThreadId}
           files={files}
           onAsk={onAsk}
+          onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
           selection={selection}
+          threads={threads}
         />
       </div>
       {pr.body ? (

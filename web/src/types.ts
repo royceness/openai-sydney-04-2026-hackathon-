@@ -64,6 +64,11 @@ export type CreateThreadResponse = {
   status: "queued" | "running" | "complete" | "failed";
 };
 
+export type CreateFollowUpResponse = {
+  thread_id: string;
+  status: "queued" | "running" | "complete" | "failed";
+};
+
 export type CodeSelection = {
   filePath: string;
   side: "old" | "new";
