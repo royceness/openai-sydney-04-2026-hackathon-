@@ -12,6 +12,9 @@ The core workflow is:
 4. The built in realtime agent can answer many questions, and deeper analysis is sent to a Codex app server backend
 5. Answers to questions
 
+
+It includes a bunch of auto analysis by default to help you with your work.
+
 I built this to explore voice based agentic UIs, with the goal of demo-ing how this could potentially work as a feature of Codex itself.
 
 
