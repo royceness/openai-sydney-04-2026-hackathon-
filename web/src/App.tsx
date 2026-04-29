@@ -3,6 +3,7 @@ import {
   createComment,
   createFollowUp,
   createReview,
+  createTestRun,
   createThread,
   deleteComment,
   getBootstrapPrUrl,
@@ -26,6 +27,7 @@ import type {
   ReviewSubmission,
   ReviewSubmissionEvent,
   ReviewThread,
+  TestRun,
 } from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
@@ -36,6 +38,7 @@ type ReviewState = {
   files: ChangedFile[];
   threads: ReviewThread[];
   submission: ReviewSubmission;
+  testRuns: TestRun[];
 };
 
 export type ThreadNavigationRequest = {
@@ -91,6 +94,7 @@ export default function App() {
         files: created.files,
         threads: created.threads,
         submission: created.submission,
+        testRuns: created.test_runs,
       };
       setReview(nextReview);
       setComments(created.comments);
@@ -210,7 +214,11 @@ export default function App() {
   }, [addDraftComment, pendingCommentBody, selection]);
 
   useEffect(() => {
-    if (!review || !review.threads.some((thread) => thread.status === "queued" || thread.status === "running")) {
+    if (
+      !review ||
+      (!review.threads.some((thread) => thread.status === "queued" || thread.status === "running") &&
+        !review.testRuns.some((testRun) => testRun.status === "queued" || testRun.status === "running"))
+    ) {
       return;
     }
 
@@ -223,6 +231,7 @@ export default function App() {
             files: session.files,
             threads: session.threads,
             submission: session.submission,
+            testRuns: session.test_runs,
           });
           setComments(session.comments);
         })
@@ -254,6 +263,7 @@ export default function App() {
           files: session.files,
           threads: session.threads,
           submission: session.submission,
+          testRuns: session.test_runs,
         });
         setComments(session.comments);
         if (response.status === "failed") {
@@ -265,6 +275,29 @@ export default function App() {
     },
     [],
   );
+
+  const handleRunTests = useCallback(async () => {
+    const context = reviewContextRef.current;
+    if (!context) {
+      return;
+    }
+    setThreadError(null);
+    try {
+      await createTestRun(context.reviewId);
+      const session = await getReview(context.reviewId);
+      setReview({
+        reviewId: session.id,
+        pr: session.pr,
+        files: session.files,
+        threads: session.threads,
+        submission: session.submission,
+        testRuns: session.test_runs,
+      });
+      setComments(session.comments);
+    } catch (caught) {
+      setThreadError(caught instanceof Error ? caught.message : "Failed to start tests");
+    }
+  }, []);
 
   const handleNavigateReference = useCallback((reference: CodeReference) => {
     setActiveFile(reference.filePath);
@@ -292,6 +325,7 @@ export default function App() {
         files: session.files,
         threads: session.threads,
         submission: session.submission,
+        testRuns: session.test_runs,
       });
       setComments(session.comments);
       if (response.status === "failed") {
@@ -545,6 +579,7 @@ export default function App() {
         commentError={commentError}
         pendingCommentBody={pendingCommentBody}
         submission={review.submission}
+        testRuns={review.testRuns}
         threadNavigationRequest={threadNavigationRequest}
         threads={review.threads}
         selection={selection}
@@ -555,6 +590,7 @@ export default function App() {
         onFollowUp={handleFollowUp}
         onNavigateReference={handleNavigateReference}
         onPublishComments={handlePublishComments}
+        onRunTests={handleRunTests}
         onSetReviewSubmissionBody={handleUpdateSubmissionBody}
         onSetReviewSubmissionEvent={handleUpdateSubmissionEvent}
       />

@@ -12,6 +12,7 @@ import type {
   ReviewSubmissionEvent,
   ReviewSession,
   ReviewThread,
+  TestRun,
 } from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -127,6 +128,13 @@ export async function createFollowUp({
     },
   );
   return readJson<CreateFollowUpResponse>(response);
+}
+
+export async function createTestRun(reviewId: string): Promise<TestRun> {
+  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/test-runs`, {
+    method: "POST",
+  });
+  return readJson<TestRun>(response);
 }
 
 export async function createComment({

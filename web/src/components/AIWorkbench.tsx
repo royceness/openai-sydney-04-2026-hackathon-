@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { CodeReference, CodeSelection, DraftComment, ReviewSubmission, ReviewSubmissionEvent, ReviewThread } from "../types";
+import type { CodeReference, CodeSelection, DraftComment, ReviewSubmission, ReviewSubmissionEvent, ReviewThread, TestRun } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
 type ThreadNavigationRequest = {
@@ -14,6 +14,7 @@ export function AIWorkbench({
   commentError,
   pendingCommentBody,
   submission,
+  testRuns,
   threads,
   selection,
   threadError,
@@ -23,6 +24,7 @@ export function AIWorkbench({
   onNavigateReference,
   onFollowUp,
   onPublishComments,
+  onRunTests,
   onSetReviewSubmissionBody,
   onSetReviewSubmissionEvent,
   threadNavigationRequest,
@@ -32,6 +34,7 @@ export function AIWorkbench({
   commentError: string | null;
   pendingCommentBody: string | null;
   submission: ReviewSubmission;
+  testRuns: TestRun[];
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
@@ -41,6 +44,7 @@ export function AIWorkbench({
   onNavigateReference: (reference: CodeReference) => void;
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onPublishComments: (body: string, event: ReviewSubmissionEvent | null) => Promise<void>;
+  onRunTests: () => Promise<void>;
   onSetReviewSubmissionBody: (body: string) => Promise<ReviewSubmission>;
   onSetReviewSubmissionEvent: (event: ReviewSubmissionEvent) => Promise<ReviewSubmission>;
   threadNavigationRequest: ThreadNavigationRequest | null;
@@ -50,6 +54,7 @@ export function AIWorkbench({
   const [commentsOpen, setCommentsOpen] = useState(true);
   const [flashedThreadId, setFlashedThreadId] = useState<string | null>(null);
   const [publishingComments, setPublishingComments] = useState(false);
+  const [runningTests, setRunningTests] = useState(false);
   const [submissionBody, setSubmissionBody] = useState(submission.body);
   const [submissionSaving, setSubmissionSaving] = useState(false);
   const knownThreadIdsRef = useRef(new Set(threads.map((thread) => thread.id)));
@@ -57,6 +62,8 @@ export function AIWorkbench({
   const [openThreadIds, setOpenThreadIds] = useState<Set<string>>(() => new Set(threads.map((thread) => thread.id)));
   const publishableCommentCount = comments.filter((comment) => comment.status === "draft" || comment.status === "failed").length;
   const hasPublishingComment = comments.some((comment) => comment.status === "publishing");
+  const latestTestRun = testRuns[0] ?? null;
+  const hasActiveTestRun = testRuns.some((testRun) => testRun.status === "queued" || testRun.status === "running");
   const canSubmitReview =
     !publishingComments &&
     !hasPublishingComment &&
@@ -263,6 +270,44 @@ export function AIWorkbench({
             </div>
           ) : null}
         </article>
+
+        <section className="mb-4 rounded-lg border border-slate-800 bg-slate-950 p-3" aria-label="Test runs">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-slate-100">Test runs</h2>
+              <div className="mt-1 truncate text-xs text-slate-500">
+                {latestTestRun ? latestTestRun.command : "Run the configured command in the PR checkout"}
+              </div>
+            </div>
+            <button
+              className="shrink-0 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={runningTests || hasActiveTestRun}
+              onClick={() => {
+                setRunningTests(true);
+                void onRunTests().finally(() => setRunningTests(false));
+              }}
+              type="button"
+            >
+              {runningTests || hasActiveTestRun ? "Running" : "Run tests"}
+            </button>
+          </div>
+          {latestTestRun ? (
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/60 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className={testRunStatusClass(latestTestRun.status)}>{latestTestRun.status}</span>
+                {latestTestRun.exit_code !== null && latestTestRun.exit_code !== undefined ? (
+                  <span className="text-xs text-slate-500">exit {latestTestRun.exit_code}</span>
+                ) : null}
+              </div>
+              {latestTestRun.error ? <div className="mt-2 text-xs text-rose-300">{latestTestRun.error}</div> : null}
+              {testRunOutput(latestTestRun) ? (
+                <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-3 font-mono text-xs leading-5 text-slate-300">
+                  {testRunOutput(latestTestRun)}
+                </pre>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
 
         <form
           className="mb-4 rounded-lg border border-slate-800 bg-slate-950 p-3"
@@ -509,6 +554,27 @@ function commentStatusClass(status: DraftComment["status"]) {
     return "rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-200";
   }
   return "rounded bg-slate-800 px-2 py-1 text-xs text-slate-300";
+}
+
+function testRunStatusClass(status: TestRun["status"]) {
+  if (status === "passed") {
+    return "rounded bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200";
+  }
+  if (status === "failed") {
+    return "rounded bg-rose-500/10 px-2 py-1 text-xs text-rose-200";
+  }
+  if (status === "running") {
+    return "rounded bg-violet-500/10 px-2 py-1 text-xs text-violet-200";
+  }
+  return "rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-200";
+}
+
+function testRunOutput(testRun: TestRun) {
+  const output = [testRun.stdout, testRun.stderr].filter(Boolean).join("\n").trim();
+  if (output.length <= 4000) {
+    return output;
+  }
+  return output.slice(-4000);
 }
 
 function reviewEventLabel(event: ReviewSubmissionEvent) {

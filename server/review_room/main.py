@@ -37,11 +37,13 @@ from review_room.models import (
     ReviewSession,
     ReviewSubmission,
     ReviewThread,
+    TestRun,
     UpdateCommentRequest,
     UpdateReviewSubmissionRequest,
 )
 from review_room.prompting import build_follow_up_prompt, build_review_prompt
 from review_room.store import ReviewStore, stable_review_id
+from review_room.test_runs import TestRunError, configured_test_command, create_queued_test_run, run_test_run
 from review_room.threads import new_thread_id, run_review_thread, run_thread_follow_up
 
 
@@ -172,6 +174,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         threads=existing_session.threads if existing_session is not None else [],
         comments=merge_review_comments(existing_session.comments if existing_session is not None else [], imported_comments),
         submission=existing_session.submission if existing_session is not None else ReviewSubmission(),
+        test_runs=existing_session.test_runs if existing_session is not None else [],
         repo_path=str(repo_path),
         created_at=existing_session.created_at if existing_session is not None else datetime.now(timezone.utc),
     )
@@ -194,6 +197,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         threads=session.threads,
         comments=session.comments,
         submission=session.submission,
+        test_runs=session.test_runs,
     )
 
 
@@ -340,6 +344,26 @@ async def create_thread(
     store.save(session)
     background_tasks.add_task(run_review_thread, store, agent, review_id, thread.id)
     return CreateThreadResponse(thread_id=thread.id, status=thread.status)
+
+
+@app.post("/api/reviews/{review_id}/test-runs", response_model=TestRun)
+async def create_test_run(review_id: str, background_tasks: BackgroundTasks) -> TestRun:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+    if session.repo_path is None:
+        raise HTTPException(status_code=409, detail="Review session has no checked-out repository")
+
+    try:
+        command = configured_test_command(os.environ.get("REVIEW_ROOM_TEST_COMMAND"))
+    except TestRunError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    test_run = create_queued_test_run(session, command)
+    store.save(session)
+    background_tasks.add_task(run_test_run, store, review_id, test_run.id)
+    return test_run
 
 
 @app.post("/api/reviews/{review_id}/threads/{thread_id}/followups", response_model=CreateFollowUpResponse)
