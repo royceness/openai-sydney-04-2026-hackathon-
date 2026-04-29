@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from review_room import main
@@ -214,6 +215,12 @@ def test_create_review_runs_default_init_threads_concurrently(tmp_path: Path, mo
 
     assert response.status_code == 200
     assert concurrent_agent.max_running == len(DEFAULT_INIT_THREAD_PROMPTS)
+    session_threads = client.get("/api/reviews/rev_acme_review_room_247").json()["threads"]
+    completed_init_threads = [thread for thread in session_threads if thread["source"] == "init"]
+    assert [thread["status"] for thread in completed_init_threads] == ["complete"] * len(DEFAULT_INIT_THREAD_PROMPTS)
+    assert [thread["markdown"] for thread in completed_init_threads] == [
+        f"{prompt.title} response" for prompt in DEFAULT_INIT_THREAD_PROMPTS
+    ]
 
 
 def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
@@ -235,7 +242,8 @@ def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path,
     ]
 
 
-def test_create_review_retries_failed_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("stale_status", ["failed", "queued", "running"])
+def test_create_review_retries_non_complete_init_threads_on_reload(tmp_path: Path, monkeypatch, stale_status: str) -> None:
     monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
     monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
     monkeypatch.setattr(main, "github", FakeGitHubClient())
@@ -246,18 +254,18 @@ def test_create_review_retries_failed_init_threads_on_reload(tmp_path: Path, mon
     create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
     review_id = create_response.json()["review_id"]
     session = main.store.get(review_id)
-    failed_thread = next(thread for thread in session.threads if thread.source == "init")
-    failed_thread.status = "failed"
-    failed_thread.error = "Separator is not found, and chunk exceed the limit"
-    failed_thread.markdown = None
-    failed_thread.codex_thread_id = None
+    stale_thread = next(thread for thread in session.threads if thread.source == "init")
+    stale_thread.status = stale_status
+    stale_thread.error = "Separator is not found, and chunk exceed the limit" if stale_status == "failed" else None
+    stale_thread.markdown = None
+    stale_thread.codex_thread_id = None
     main.store.save(session)
 
     reload_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
 
     assert reload_response.status_code == 200
     session_threads = client.get(f"/api/reviews/{review_id}").json()["threads"]
-    retried_thread = next(thread for thread in session_threads if thread["id"] == failed_thread.id)
+    retried_thread = next(thread for thread in session_threads if thread["id"] == stale_thread.id)
     assert retried_thread["status"] == "complete"
     assert retried_thread["error"] is None
     assert retried_thread["markdown"]

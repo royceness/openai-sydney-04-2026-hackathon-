@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -50,15 +50,19 @@ github = GitHubClient()
 checkout = RepoCheckoutService(store.workspace_dir)
 agent = CodexAppServerAgentPool()
 HOME_ENV_PATH = Path.home() / ".env"
+active_thread_tasks: set[tuple[str, str]] = set()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    warm_task = None
     if should_warm_codex_on_startup():
-        await agent.start()
+        warm_task = asyncio.create_task(agent.start())
     try:
         yield
     finally:
+        if warm_task is not None and not warm_task.done():
+            warm_task.cancel()
         await agent.close()
 
 
@@ -181,13 +185,7 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
 
     store.save(session)
     if created_init_threads:
-        background_tasks.add_task(
-            run_review_threads,
-            store,
-            agent,
-            session.id,
-            [thread.id for thread in created_init_threads],
-        )
+        background_tasks.add_task(schedule_review_threads, session.id, [thread.id for thread in created_init_threads])
 
     return CreateReviewResponse(
         review_id=session.id,
@@ -197,6 +195,23 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         comments=session.comments,
         submission=session.submission,
     )
+
+
+async def schedule_review_threads(review_id: str, thread_ids: list[str]) -> None:
+    task_keys = [(review_id, thread_id) for thread_id in thread_ids]
+    runnable_thread_ids = []
+    active_keys = []
+    for task_key, thread_id in zip(task_keys, thread_ids, strict=True):
+        if task_key in active_thread_tasks:
+            continue
+        active_thread_tasks.add(task_key)
+        active_keys.append(task_key)
+        runnable_thread_ids.append(thread_id)
+    try:
+        await run_review_threads(store, agent, review_id, runnable_thread_ids)
+    finally:
+        for task_key in active_keys:
+            active_thread_tasks.discard(task_key)
 
 
 async def run_review_threads(store: ReviewStore, agent: CodeAgent, review_id: str, thread_ids: list[str]) -> None:

@@ -83,7 +83,7 @@ def ensure_init_threads(session: ReviewSession, prompts: Sequence[InitThreadProm
     for prompt in prompts:
         existing_thread = existing_threads.get(prompt.title)
         if existing_thread is not None:
-            if existing_thread.status == "failed":
+            if existing_thread.status != "complete":
                 existing_thread.status = "queued"
                 existing_thread.error = None
                 existing_thread.markdown = None
