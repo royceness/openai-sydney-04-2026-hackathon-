@@ -431,13 +431,18 @@ describe("VoiceSelectionDemo", () => {
     const options = renderVoiceSelectionDemo();
 
     expect(options.instructions).toContain("Usually stay quiet");
+    expect(options.instructions).toContain("Use this decision order: answer simple questions directly, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation");
     expect(options.instructions).toContain("Call list_pr_comments");
     expect(options.instructions).toContain("Call edit_pr_comment");
     expect(options.instructions).toContain("Call delete_pr_comment");
     expect(options.instructions).toContain("one or two short sentences");
     expect(options.instructions).toContain("concise and precise");
     expect(options.instructions).toContain("For UI commands, call the matching tool and do not add a spoken confirmation");
-    expect(options.instructions).toContain("answer immediately out loud");
+    expect(options.instructions).toContain("Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread");
+    expect(options.instructions).toContain("If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next");
+    expect(options.instructions).toContain("For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases");
+    expect(options.instructions).toContain("call ask_general_question so Codex can inspect the repository");
+    expect(options.instructions).toContain("When the user asks you to say, explain, or answer something simple");
   });
 
   it("logs completed user voice transcripts without repeating duplicates", () => {
@@ -773,7 +778,6 @@ describe("VoiceSelectionDemo", () => {
       type: "response.create",
       response: {
         instructions: 'Say exactly this brief status update and nothing else: "The thread \\"Found issue\\" is complete."',
-        modalities: ["audio"],
       },
     });
   });
