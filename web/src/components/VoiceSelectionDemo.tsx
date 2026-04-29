@@ -68,6 +68,7 @@ export function VoiceSelectionDemo({
   const onNavigateFileRef = useRef(onNavigateFile);
   const selectionRef = useRef<CodeSelection | null>(selection);
   const threadsRef = useRef<ReviewThread[]>(threads);
+  const lastLoggedAssistantSpeechRef = useRef<string | null>(null);
   const lastLoggedUserTranscriptRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -118,7 +119,7 @@ export function VoiceSelectionDemo({
     () => [
       defineVoiceTool({
         name: "no_action_required_or_unclear_audio",
-        description: "Use this when no UI action is required, or when the audio is noisy, unclear, unrelated, or does not explicitly ask to show the selected text, create a review thread, or navigate files.",
+        description: "Use this when the audio is noisy, unclear, partial, unrelated, background conversation, or when no UI action or spoken answer is required. Do not speak when using this tool.",
         parameters: z.object({}),
         execute: () => ({ ok: true, ignored: true }),
       }),
@@ -311,9 +312,13 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Usually stay quiet. When the user asks you to say, explain, or answer something, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks to search, grep, or find text across loaded threads. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For simple questions or guidance you can answer immediately out loud without calling a tool. If you cannot know the answer from current app state, ask for the missing context briefly.",
+      audio: { output: { voice: "marin" } },
       onEvent: (event) => {
-        logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
+        logVoiceTranscript(event, {
+          assistant: lastLoggedAssistantSpeechRef,
+          user: lastLoggedUserTranscriptRef,
+        });
       },
       onError: (voiceError) => {
         console.error("[voice] error", voiceError);
@@ -334,9 +339,9 @@ export function VoiceSelectionDemo({
           console.info("[voice] tool success", call);
         }
       },
-      outputMode: "tool-only",
+      outputMode: "audio",
       postToolResponse: true,
-      toolChoice: "required",
+      toolChoice: "auto",
       tools,
     }),
   );
@@ -526,6 +531,11 @@ function normalizeFileQuery(value: string | undefined) {
 type TranscriptEvent = {
   type?: unknown;
   transcript?: unknown;
+};
+
+type TranscriptRefs = {
+  assistant: MutableRefObject<string | null>;
+  user: MutableRefObject<string | null>;
 };
 
 type ReviewRoomContextInput = {
@@ -767,17 +777,25 @@ function truncateForVoice(value: string, maxLength: number) {
   return `${normalized.slice(0, maxLength - 1)}...`;
 }
 
-function logCompletedUserTranscript(event: TranscriptEvent, lastLoggedUserTranscriptRef: MutableRefObject<string | null>) {
-  if (event.type !== "conversation.item.input_audio_transcription.completed") {
+function logVoiceTranscript(event: TranscriptEvent, refs: TranscriptRefs) {
+  if (event.type === "conversation.item.input_audio_transcription.completed") {
+    logCompletedTranscript("[voice] user transcript", event.transcript, refs.user);
     return;
   }
-  if (typeof event.transcript !== "string") {
+
+  if (event.type === "response.output_audio_transcript.done") {
+    logCompletedTranscript("[voice] assistant speech", event.transcript, refs.assistant);
+  }
+}
+
+function logCompletedTranscript(label: string, value: unknown, lastLoggedRef: MutableRefObject<string | null>) {
+  if (typeof value !== "string") {
     return;
   }
-  const transcript = event.transcript.trim();
-  if (!transcript || transcript === lastLoggedUserTranscriptRef.current) {
+  const transcript = value.trim();
+  if (!transcript || transcript === lastLoggedRef.current) {
     return;
   }
-  lastLoggedUserTranscriptRef.current = transcript;
-  console.info("[voice] user transcript", transcript);
+  lastLoggedRef.current = transcript;
+  console.info(label, transcript);
 }
