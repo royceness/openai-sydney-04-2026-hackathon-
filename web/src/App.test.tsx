@@ -200,7 +200,7 @@ describe("App draft comments", () => {
     expect(screen.getByText("Comment failed: GitHub rejected the line")).toBeInTheDocument();
   });
 
-  it("announces only queued or running threads that become terminal", async () => {
+  it("announces only non-init queued or running threads that become terminal", async () => {
     const { nextThreadStatusAnnouncement } = await import("./App");
     const completeThread: ReviewThread = {
       id: "thr_1",
@@ -217,7 +217,12 @@ describe("App draft comments", () => {
       text: 'The thread "Diagram this flow" is complete.',
     });
     expect(nextThreadStatusAnnouncement([completeThread], new Map())).toBeNull();
-    expect(nextThreadStatusAnnouncement([{ ...completeThread, status: "running" }], new Map([["thr_1", "queued"]]))).toBeNull();
+    expect(
+      nextThreadStatusAnnouncement([{ ...completeThread, status: "running" }], new Map([["thr_1", "queued"]])),
+    ).toBeNull();
+    expect(
+      nextThreadStatusAnnouncement([{ ...completeThread, source: "init" }], new Map([["thr_1", "running"]])),
+    ).toBeNull();
   });
 
 });

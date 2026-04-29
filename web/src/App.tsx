@@ -479,6 +479,9 @@ export function nextThreadStatusAnnouncement(
   previousStatuses: Map<string, ReviewThread["status"]>,
 ): ThreadStatusAnnouncement | null {
   const changedThread = threads.find((thread) => {
+    if (thread.source === "init") {
+      return false;
+    }
     const previous = previousStatuses.get(thread.id);
     return previous !== undefined && isInProgressStatus(previous) && isTerminalStatus(thread.status);
   });

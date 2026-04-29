@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from review_room import main
 from review_room.agent import AgentResult
 from review_room.github import ParsedPullRequestUrl
+from review_room.init_threads import DEFAULT_INIT_THREAD_PROMPTS
 from review_room.models import ChangedFile, PublishedComment, PublishCommentRequest, PullRequestInfo
 from review_room.store import ReviewStore
 
@@ -69,12 +70,14 @@ class FakeCheckoutServiceAtPath:
 class FakeAgent:
     async def run_thread(self, repo_path: str, title: str, prompt: str, on_delta=None) -> AgentResult:
         assert repo_path == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
-        assert title == "Explain this function"
         assert "User request:" in prompt
         if on_delta is not None:
             await on_delta("This function validates ")
             await on_delta("the selected input.")
-        return AgentResult(codex_thread_id="codex-thread-1", markdown="This function validates the selected input.")
+        markdown = "This function validates the selected input."
+        if title != "Explain this function":
+            markdown = f"{title}: {markdown}"
+        return AgentResult(codex_thread_id="codex-thread-1", markdown=markdown)
 
     async def continue_thread(self, repo_path: str, codex_thread_id: str, prompt: str, on_delta=None) -> AgentResult:
         assert repo_path == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
@@ -135,6 +138,87 @@ def test_create_review_persists_session_and_serves_file_diff(tmp_path: Path, mon
 
     assert diff_response.status_code == 200
     assert diff_response.json() == {"file_path": "src/review/diagram.ts", "diff": "@@ -1 +1 @@\n-old\n+new"}
+
+
+def test_create_review_starts_default_init_threads(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 200
+    init_threads = [thread for thread in response.json()["threads"] if thread["source"] == "init"]
+    assert [thread["title"] for thread in init_threads] == [prompt.title for prompt in DEFAULT_INIT_THREAD_PROMPTS]
+    session_threads = client.get("/api/reviews/rev_acme_review_room_247").json()["threads"]
+    completed_init_threads = [thread for thread in session_threads if thread["source"] == "init"]
+    assert [thread["status"] for thread in completed_init_threads] == ["complete"] * len(DEFAULT_INIT_THREAD_PROMPTS)
+    assert all(thread["markdown"] for thread in completed_init_threads)
+
+
+def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    first_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    second_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    session_threads = client.get("/api/reviews/rev_acme_review_room_247").json()["threads"]
+    assert [thread["title"] for thread in session_threads if thread["source"] == "init"] == [
+        prompt.title for prompt in DEFAULT_INIT_THREAD_PROMPTS
+    ]
+
+
+def test_create_review_uses_configured_init_threads(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "pr-summary,bug-finder")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 200
+    init_threads = [thread for thread in response.json()["threads"] if thread["source"] == "init"]
+    assert [thread["title"] for thread in init_threads] == ["PR summary", "Bug finder"]
+
+
+def test_create_review_can_disable_init_threads(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 200
+    assert [thread for thread in response.json()["threads"] if thread["source"] == "init"] == []
+
+
+def test_create_review_rejects_unknown_init_thread_config(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_ROOM_INIT_THREADS", "pr-summary,unknown-audit")
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 500
+    assert "unknown-audit" in response.json()["detail"]
 
 
 def test_get_file_content_serves_line_range_with_context(tmp_path: Path, monkeypatch) -> None:
@@ -401,7 +485,11 @@ def test_create_review_preserves_existing_threads(tmp_path: Path, monkeypatch) -
 
     assert reload_response.status_code == 200
     session_response = client.get(f"/api/reviews/{review_id}")
-    assert len(session_response.json()["threads"]) == 1
+    threads = session_response.json()["threads"]
+    assert len(threads) == len(DEFAULT_INIT_THREAD_PROMPTS) + 1
+    assert [thread["title"] for thread in threads if thread["source"] == "init"] == [
+        prompt.title for prompt in DEFAULT_INIT_THREAD_PROMPTS
+    ]
 
 
 def test_realtime_session_requires_openai_api_key(monkeypatch) -> None:
