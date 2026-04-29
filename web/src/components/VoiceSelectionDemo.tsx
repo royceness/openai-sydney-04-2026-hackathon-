@@ -9,7 +9,7 @@ import {
 import { z } from "zod";
 import { getFileContent } from "../api";
 import type { ThreadStatusAnnouncement } from "../App";
-import type { ChangedFile, CodeSelection, DraftComment, FileContentResponse, ReviewThread } from "../types";
+import type { ChangedFile, CodeSelection, DraftComment, FileContentResponse, PullRequestInfo, ReviewThread } from "../types";
 
 type VoicePopup = {
   title: string;
@@ -47,6 +47,7 @@ export function VoiceSelectionDemo({
   onFollowUp,
   onNavigateFile,
   onNavigateThread,
+  pr,
   readFileContent = getFileContent,
   reviewId,
   selection,
@@ -64,6 +65,7 @@ export function VoiceSelectionDemo({
   onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   onNavigateThread: (threadId: string) => void;
+  pr: PullRequestInfo;
   readFileContent?: typeof getFileContent;
   reviewId: string;
   selection: CodeSelection | null;
@@ -85,6 +87,7 @@ export function VoiceSelectionDemo({
   const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
   const onNavigateThreadRef = useRef(onNavigateThread);
+  const prRef = useRef<PullRequestInfo>(pr);
   const readFileContentRef = useRef(readFileContent);
   const reviewIdRef = useRef(reviewId);
   const selectionRef = useRef<CodeSelection | null>(selection);
@@ -138,6 +141,10 @@ export function VoiceSelectionDemo({
   }, [onNavigateThread]);
 
   useEffect(() => {
+    prRef.current = pr;
+  }, [pr]);
+
+  useEffect(() => {
     readFileContentRef.current = readFileContent;
   }, [readFileContent]);
 
@@ -173,13 +180,15 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "get_review_room_context",
-        description: "Read the current Review Room page context, including selected diff code, selected page text, selected draft PR comment, focused Codex thread, and visible workbench thread summaries. Use this when the user refers to this issue, this thread, the selected text, selected comment, or what is on the page and the target may be ambiguous.",
+        description: "Read the current Review Room page context, including PR title and description, changed-file summaries, selected diff code, selected page text, selected draft PR comment, focused Codex thread, visible workbench thread summaries, and auto-generated initial analysis thread statuses. Use this when the user refers to this PR, this issue, this thread, the selected text, selected comment, or what is on the page and the target may be ambiguous.",
         parameters: z.object({}),
         execute: () => {
           const context = buildReviewRoomContext({
             activeFile: activeFileRef.current,
             activeThreadId: activeThreadIdRef.current,
             comments: commentsRef.current,
+            files: filesRef.current,
+            pr: prRef.current,
             selection: selectionRef.current,
             selectedCommentId: selectedDraftCommentId(),
             threads: threadsRef.current,
@@ -190,7 +199,7 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "list_review_threads",
-        description: "List all currently loaded Review Room workbench threads, including each Review Room thread id, Codex thread id when available, title, status, and source.",
+        description: "List all currently loaded Review Room workbench threads, including each Review Room thread id, Codex thread id when available, title, status, source, and whether it is an auto-generated initial analysis thread.",
         parameters: z.object({}),
         execute: () => {
           const threads = listThreadSummariesForVoice(threadsRef.current);
@@ -218,7 +227,7 @@ export function VoiceSelectionDemo({
       }),
       defineVoiceTool({
         name: "search_review_threads",
-        description: "Search already-loaded Review Room thread titles and Markdown text using simple case-insensitive text matching. Use this to find existing answers or resolve ambiguous references to prior findings, such as test gaps, risks, edge cases, or issues. If the user asks for repository investigation and the existing threads do not answer it, create a Codex thread instead.",
+        description: "Search already-loaded Review Room thread titles and Markdown text using simple case-insensitive text matching. Use this to find existing answers or resolve ambiguous references to prior findings, such as test gaps, risks, edge cases, or issues. The response includes auto-generated initial analysis thread statuses so you can tell whether that analysis is still queued/running or complete. If the user asks for repository investigation and the existing threads do not answer it, create a Codex thread instead.",
         parameters: z.object({
           query: z.string().min(1).describe("Plain text to search for. Do not use regular expressions."),
         }),
@@ -445,7 +454,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, or asks for thread names. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, call ask_general_question so Codex can inspect the repository unless an existing thread search already provides the answer. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
+        "You are controlling a pull request review UI. Usually stay quiet. Use this decision order: answer simple questions directly, check auto-generated initial analysis threads for high-level PR context, search existing threads for existing answers or ambiguous references, and create a Codex thread when the question needs repository investigation. The auto-generated initial analysis threads have source init and are: PR summary, Tests audit, Architecture coherence report, Bug finder, and Doc validator. They may take some time to complete. For general PR questions, bias toward reading those threads first with list_review_threads, search_review_threads, get_review_thread_text, or get_review_room_context. If a user asks a question that might be answered by the initial analysis while any of those threads are queued or running, try to answer from the PR description and changed files available in get_review_room_context or list_pr_files, and say that after the initial analysis finishes you can give a deeper answer. Use thread status fields to tell whether an initial analysis thread is queued, running, complete, or failed. When the user asks you to say, explain, or answer something simple, speak naturally but stay concise and precise: usually one or two short sentences, no preamble. For noisy, unclear, partial, unrelated, or background audio, call no_action_required_or_unclear_audio and say nothing. For UI commands, call the matching tool and do not add a spoken confirmation. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here; extract the requested comment text into the comment parameter. Call get_review_room_context when the user refers to the selected comment or current app state. Call list_pr_comments when the user asks what PR comments exist, asks to list comments, needs comment ids, or may be referring to a different comment than the selected one. Call edit_pr_comment to edit a draft PR comment by id. Call delete_pr_comment to delete a draft PR comment by id. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this PR, this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call list_review_threads when the user asks what threads exist, asks for thread ids, asks for thread names, or asks whether initial analysis is still processing. Call get_review_thread_text when the user asks to read text from a thread by line range. Call search_review_threads when the user asks whether an answer already exists, asks what previous threads said, asks to search prior answers, or refers ambiguously to something that may already be in a thread, such as test gaps, risks, edge cases, issues, or findings. If search_review_threads does not provide enough information and repository investigation is needed, call ask_general_question next. For requests to find tests, test coverage, callers, usages, risks, behavior, or edge cases for the selected code/file/PR, search the existing and auto-generated initial analysis threads first unless the user asks for a fresh investigation; if those threads do not answer it, call ask_general_question so Codex can inspect the repository. Call navigate_review_thread when the user asks to open, show, jump to, focus, or navigate to a specific review thread. Call list_pr_files when the user asks what files changed. Call summarize_changed_lines when the user asks where a file changed, what changed lines exist, or before reading surrounding source around changes. Call read_pr_file_range when the user asks to read source around line ranges or changed lines. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that should be delegated to Codex; this includes requests to find tests, find callers, check coverage, draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. If you cannot know the answer from current app state and repository investigation is needed, call ask_general_question. If you cannot know what the user means, ask for the missing context briefly.",
       audio: { output: { voice: "marin" } },
       onEvent: (event) => {
         logVoiceTranscript(event, {
@@ -923,6 +932,8 @@ type ReviewRoomContextInput = {
   activeFile: string | null;
   activeThreadId: string | null;
   comments?: DraftComment[];
+  files: ChangedFile[];
+  pr: PullRequestInfo;
   selection: CodeSelection | null;
   selectedCommentId?: string | null;
   threads: ReviewThread[];
@@ -930,18 +941,41 @@ type ReviewRoomContextInput = {
 
 export type ReviewRoomVoiceContext = {
   activeFile: string | null;
+  pr: PullRequestVoiceSummary;
+  changedFiles: ChangedFileVoiceSummary[];
   selectedCode: CodeSelection | null;
   selectedDraftComment: DraftCommentVoiceSummary | null;
   selectedPageText: string | null;
   activeThread: ThreadVoiceSummary | null;
   threads: ThreadVoiceSummary[];
+  initialAnalysisThreads: ReviewThreadVoiceListItem[];
   popupText: string;
+};
+
+export type PullRequestVoiceSummary = {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  body: string | null;
+  baseRef: string;
+  headRef: string;
+};
+
+export type ChangedFileVoiceSummary = {
+  path: string;
+  status: ChangedFile["status"];
+  additions: number;
+  deletions: number;
 };
 
 type ThreadVoiceSummary = {
   id: string;
+  codexThreadId: string | null;
   title: string;
   status: ReviewThread["status"];
+  source: ReviewThread["source"];
+  autoGeneratedInitialAnalysis: boolean;
   context: CodeSelection | null;
   markdownExcerpt: string | null;
 };
@@ -952,6 +986,7 @@ export type ReviewThreadVoiceListItem = {
   title: string;
   status: ReviewThread["status"];
   source: ReviewThread["source"];
+  autoGeneratedInitialAnalysis: boolean;
 };
 
 export type ThreadTextResult =
@@ -972,12 +1007,16 @@ export type ThreadTextResult =
 export type ThreadSearchResult = {
   query: string;
   matches: ThreadSearchMatch[];
+  initialAnalysisThreads: ReviewThreadVoiceListItem[];
 };
 
 export type ThreadSearchMatch = {
   threadId: string;
   codexThreadId: string | null;
   title: string;
+  status: ReviewThread["status"];
+  source: ReviewThread["source"];
+  autoGeneratedInitialAnalysis: boolean;
   line: number;
   text: string;
 };
@@ -986,6 +1025,8 @@ export function buildReviewRoomContext({
   activeFile,
   activeThreadId,
   comments = [],
+  files,
+  pr,
   selection,
   selectedCommentId = null,
   threads,
@@ -994,14 +1035,18 @@ export function buildReviewRoomContext({
   const activeThread = summaries.find((thread) => thread.id === activeThreadId) ?? null;
   const selectedDraftComment = selectedCommentId ? listDraftCommentsForVoice(comments).find((comment) => comment.id === selectedCommentId) ?? null : null;
   const selectedPageText = selectedPageTextForVoice();
+  const initialAnalysisThreads = listInitialAnalysisThreads(threads);
   return {
     activeFile,
+    pr: summarizePullRequestForVoice(pr),
+    changedFiles: summarizeChangedFilesForVoice(files),
     selectedCode: selection,
     selectedDraftComment,
     selectedPageText,
     activeThread,
     threads: summaries,
-    popupText: contextPopupText(selection, selectedDraftComment, selectedPageText, activeThread),
+    initialAnalysisThreads,
+    popupText: contextPopupText(pr, files, selection, selectedDraftComment, selectedPageText, activeThread, initialAnalysisThreads),
   };
 }
 
@@ -1043,7 +1088,7 @@ export function getThreadTextByLineRange(
 export function searchThreadsByText(threads: ReviewThread[], query: string): ThreadSearchResult {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
-    return { query: "", matches: [] };
+    return { query: "", matches: [], initialAnalysisThreads: listInitialAnalysisThreads(threads) };
   }
 
   const matches: ThreadSearchMatch[] = [];
@@ -1057,12 +1102,15 @@ export function searchThreadsByText(threads: ReviewThread[], query: string): Thr
         threadId: thread.id,
         codexThreadId: thread.codex_thread_id ?? null,
         title: thread.title,
+        status: thread.status,
+        source: thread.source,
+        autoGeneratedInitialAnalysis: isInitialAnalysisThread(thread),
         line: index === 0 ? 0 : index,
         text: truncateForVoice(line, 320),
       });
     });
   }
-  return { query: query.trim(), matches };
+  return { query: query.trim(), matches, initialAnalysisThreads: listInitialAnalysisThreads(threads) };
 }
 
 export type FollowUpThreadResolution =
@@ -1100,8 +1148,11 @@ export function resolveFollowUpThread(
 function summarizeThreadForVoice(thread: ReviewThread): ThreadVoiceSummary {
   return {
     id: thread.id,
+    codexThreadId: thread.codex_thread_id ?? null,
     title: thread.title,
     status: thread.status,
+    source: thread.source,
+    autoGeneratedInitialAnalysis: isInitialAnalysisThread(thread),
     context: thread.context ?? null,
     markdownExcerpt: thread.markdown ? truncateForVoice(thread.markdown, 1200) : null,
   };
@@ -1114,7 +1165,37 @@ function summarizeThreadNavigationTarget(thread: ReviewThread): ReviewThreadVoic
     title: thread.title,
     status: thread.status,
     source: thread.source,
+    autoGeneratedInitialAnalysis: isInitialAnalysisThread(thread),
   };
+}
+
+function listInitialAnalysisThreads(threads: ReviewThread[]) {
+  return listThreadSummariesForVoice(threads.filter(isInitialAnalysisThread));
+}
+
+function isInitialAnalysisThread(thread: ReviewThread) {
+  return thread.source === "init";
+}
+
+function summarizePullRequestForVoice(pr: PullRequestInfo): PullRequestVoiceSummary {
+  return {
+    owner: pr.owner,
+    repo: pr.repo,
+    number: pr.number,
+    title: pr.title,
+    body: pr.body?.trim() || null,
+    baseRef: pr.base_ref,
+    headRef: pr.head_ref,
+  };
+}
+
+function summarizeChangedFilesForVoice(files: ChangedFile[]): ChangedFileVoiceSummary[] {
+  return files.map((file) => ({
+    path: file.path,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+  }));
 }
 
 function splitThreadText(thread: ReviewThread) {
@@ -1129,7 +1210,12 @@ function threadsPopupText(threads: ReviewThreadVoiceListItem[]) {
   if (threads.length === 0) {
     return "No review threads are loaded.";
   }
-  return threads.map((thread) => `${thread.id} - ${thread.title} (${thread.status})`).join("\n");
+  return threads
+    .map((thread) => {
+      const source = thread.autoGeneratedInitialAnalysis ? "auto-generated initial analysis" : thread.source;
+      return `${thread.id} - ${thread.title} (${thread.status}, ${source})`;
+    })
+    .join("\n");
 }
 
 function threadSearchPopupText(result: ThreadSearchResult) {
@@ -1141,7 +1227,10 @@ function threadSearchPopupText(result: ThreadSearchResult) {
   }
   return result.matches
     .slice(0, 8)
-    .map((match) => `${match.threadId}${match.line > 0 ? `:L${match.line}` : ":title"} - ${match.text}`)
+    .map((match) => {
+      const source = match.autoGeneratedInitialAnalysis ? "auto-generated initial analysis" : match.source;
+      return `${match.threadId}${match.line > 0 ? `:L${match.line}` : ":title"} (${match.status}, ${source}) - ${match.text}`;
+    })
     .join("\n");
 }
 
@@ -1151,12 +1240,23 @@ function selectedPageTextForVoice() {
 }
 
 function contextPopupText(
+  pr: PullRequestInfo,
+  files: ChangedFile[],
   selection: CodeSelection | null,
   selectedDraftComment: DraftCommentVoiceSummary | null,
   selectedPageText: string | null,
   activeThread: ThreadVoiceSummary | null,
+  initialAnalysisThreads: ReviewThreadVoiceListItem[],
 ) {
+  const initialAnalysisStatus =
+    initialAnalysisThreads.length > 0
+      ? initialAnalysisThreads.map((thread) => `${thread.title}: ${thread.status}`).join(", ")
+      : "none";
   const parts = [
+    `PR: #${pr.number} ${pr.title}`,
+    `PR description: ${pr.body?.trim() ? truncateForVoice(pr.body, 320) : "No PR description provided."}`,
+    `Changed files: ${formatChangedFilesForPopup(files)}`,
+    `Auto-generated initial analysis threads: ${initialAnalysisStatus}`,
     selection ? selectedLocationMessage(selection) : "No diff code is selected.",
     selectedDraftComment ? `Selected draft comment: ${selectedDraftComment.id} (${commentLocationText(selectedDraftComment)})` : "No draft PR comment is selected.",
     activeThread ? `Focused thread: ${activeThread.title}` : "No Codex thread is focused.",

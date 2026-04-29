@@ -67,6 +67,7 @@ export function PullRequestPanel({
           onFollowUp={onFollowUp}
           onNavigateFile={onNavigateFile}
           onNavigateThread={onNavigateThread}
+          pr={pr}
           reviewId={reviewId}
           selection={selection}
           threadStatusAnnouncement={threadStatusAnnouncement}
