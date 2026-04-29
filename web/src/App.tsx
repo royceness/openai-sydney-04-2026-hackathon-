@@ -198,12 +198,26 @@ export default function App() {
         return { status: "empty" as const };
       }
       const context = reviewContextRef.current;
-      if (!context?.selection) {
+      if (context?.selection) {
+        addDraftComment(trimmed, context.selection);
+        return { status: "created" as const };
+      }
+      if (context?.activeFile) {
+        addDraftComment(trimmed, {
+          filePath: context.activeFile,
+          side: "new",
+          startLine: 1,
+          endLine: 1,
+          selectedText: "",
+        });
+        return { status: "created" as const };
+      }
+      if (!context) {
         setPendingCommentBody(trimmed);
         return { status: "selection-required" as const };
       }
-      addDraftComment(trimmed, context.selection);
-      return { status: "created" as const };
+      setPendingCommentBody(trimmed);
+      return { status: "selection-required" as const };
     },
     [addDraftComment],
   );

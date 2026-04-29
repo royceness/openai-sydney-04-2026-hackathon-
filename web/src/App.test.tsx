@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangedFile, CodeSelection, DraftComment, PullRequestInfo, ReviewThread } from "./types";
 
 const pr: PullRequestInfo = {
@@ -100,19 +100,33 @@ describe("App draft comments", () => {
     window.history.replaceState(null, "", "/?pr=https://github.com/octocat/Hello-World/pull/1");
   });
 
-  it("queues a requested PR comment until the user selects diff lines", async () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("attaches a requested PR comment to the active file when no lines are selected", async () => {
     const { default: App } = await import("./App");
 
     render(<App />);
 
     await userEvent.click(await screen.findByText("Draft without selection"));
 
-    expect(screen.getByText("Pending: this needs tests")).toBeInTheDocument();
+    expect(screen.queryByText("Pending: this needs tests")).not.toBeInTheDocument();
+    expect(screen.getByText("Comment: this needs tests")).toBeInTheDocument();
+    expect(screen.getByText("Location: README:L1-L1")).toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByText("Select README lines"));
+  it("attaches a requested PR comment to selected lines when they exist", async () => {
+    const { default: App } = await import("./App");
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByText("Select README lines"));
+    await userEvent.click(screen.getByText("Draft without selection"));
 
     expect(screen.queryByText("Pending: this needs tests")).not.toBeInTheDocument();
     expect(screen.getByText("Comment: this needs tests")).toBeInTheDocument();
     expect(screen.getByText("Location: README:L1-L2")).toBeInTheDocument();
   });
+
 });
