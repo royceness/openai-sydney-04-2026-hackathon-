@@ -1,6 +1,6 @@
 # Review Room
 
-Review Room helps a human reviewer understand large or AI-generated PRs faster by keeping code, review context, draft comments, and AI investigation threads in one place.
+Review Room helps a human reviewer understand and review large or AI-generated PRs faster by keeping code, review context, draft comments, and AI investigation threads in one place.
 
 Review Room is a voice-first code review cockpit for GitHub pull requests. It loads a PR into a focused three-pane interface: changed files on the left, PR details and diffs in the center, and an AI review workbench on the right.
 
