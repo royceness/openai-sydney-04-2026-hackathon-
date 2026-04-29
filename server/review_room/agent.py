@@ -210,3 +210,46 @@ class CodexAppServerAgent:
         except TimeoutError:
             proc.kill()
             await proc.wait()
+
+
+class CodexAppServerAgentPool:
+    def __init__(self, command: str | None = None, concurrency: int | None = None) -> None:
+        self.concurrency = concurrency if concurrency is not None else int(os.environ.get("REVIEW_ROOM_CODEX_CONCURRENCY", "5"))
+        if self.concurrency < 1:
+            raise ValueError("REVIEW_ROOM_CODEX_CONCURRENCY must be at least 1")
+        self._workers = [CodexAppServerAgent(command=command) for _ in range(self.concurrency)]
+        self._available: asyncio.Queue[CodexAppServerAgent] = asyncio.Queue()
+        for worker in self._workers:
+            self._available.put_nowait(worker)
+
+    async def start(self) -> None:
+        await asyncio.gather(*(worker.start() for worker in self._workers))
+
+    async def close(self) -> None:
+        await asyncio.gather(*(worker.close() for worker in self._workers))
+
+    async def run_thread(
+        self,
+        repo_path: str,
+        title: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
+        worker = await self._available.get()
+        try:
+            return await worker.run_thread(repo_path, title, prompt, on_delta)
+        finally:
+            self._available.put_nowait(worker)
+
+    async def continue_thread(
+        self,
+        repo_path: str,
+        codex_thread_id: str,
+        prompt: str,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> AgentResult:
+        worker = await self._available.get()
+        try:
+            return await worker.continue_thread(repo_path, codex_thread_id, prompt, on_delta)
+        finally:
+            self._available.put_nowait(worker)

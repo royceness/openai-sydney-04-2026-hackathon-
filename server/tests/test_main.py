@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -112,6 +113,24 @@ class FakeAgent:
         return AgentResult(codex_thread_id=codex_thread_id, markdown="The follow-up answer cites the same issue.")
 
 
+class ConcurrentFakeAgent:
+    def __init__(self) -> None:
+        self.running = 0
+        self.max_running = 0
+
+    async def run_thread(self, repo_path: str, title: str, prompt: str, on_delta=None) -> AgentResult:
+        self.running += 1
+        self.max_running = max(self.max_running, self.running)
+        await asyncio.sleep(0.01)
+        if on_delta is not None:
+            await on_delta(f"{title} response")
+        self.running -= 1
+        return AgentResult(codex_thread_id=f"codex-{title}", markdown=f"{title} response")
+
+    async def continue_thread(self, repo_path: str, codex_thread_id: str, prompt: str, on_delta=None) -> AgentResult:
+        return AgentResult(codex_thread_id=codex_thread_id, markdown="follow-up")
+
+
 class FakeAsyncClient:
     requests: list[dict[str, object]] = []
 
@@ -180,6 +199,21 @@ def test_create_review_starts_default_init_threads(tmp_path: Path, monkeypatch) 
     completed_init_threads = [thread for thread in session_threads if thread["source"] == "init"]
     assert [thread["status"] for thread in completed_init_threads] == ["complete"] * len(DEFAULT_INIT_THREAD_PROMPTS)
     assert all(thread["markdown"] for thread in completed_init_threads)
+
+
+def test_create_review_runs_default_init_threads_concurrently(tmp_path: Path, monkeypatch) -> None:
+    concurrent_agent = ConcurrentFakeAgent()
+    monkeypatch.delenv("REVIEW_ROOM_INIT_THREADS", raising=False)
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", concurrent_agent)
+    client = TestClient(main.app)
+
+    response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+
+    assert response.status_code == 200
+    assert concurrent_agent.max_running == len(DEFAULT_INIT_THREAD_PROMPTS)
 
 
 def test_create_review_does_not_duplicate_init_threads_on_reload(tmp_path: Path, monkeypatch) -> None:

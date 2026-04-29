@@ -1,9 +1,10 @@
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
-from review_room.agent import CodexAppServerAgent
+from review_room.agent import CodexAppServerAgent, CodexAppServerAgentPool
 
 
 def test_codex_agent_requests_spark_fast_low_reasoning() -> None:
@@ -82,6 +83,25 @@ async def test_codex_agent_forwards_deltas(monkeypatch, tmp_path: Path) -> None:
 
     assert deltas == ["First response"]
     assert result.markdown == "First response"
+
+
+@pytest.mark.asyncio
+async def test_codex_agent_pool_starts_five_app_server_processes(monkeypatch, tmp_path: Path) -> None:
+    created_processes: list[FakeProcess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        process = FakeProcess(limit=kwargs.get("limit"))
+        created_processes.append(process)
+        return process
+
+    monkeypatch.setattr("review_room.agent.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    agent = CodexAppServerAgentPool(command="codex", concurrency=5)
+
+    await agent.start()
+    results = await asyncio.gather(*(agent.run_thread(str(tmp_path), f"Thread {index}", "Prompt") for index in range(5)))
+
+    assert len(created_processes) == 5
+    assert [result.markdown for result in results] == ["First response"] * 5
 
 
 def append_delta(deltas: list[str]):

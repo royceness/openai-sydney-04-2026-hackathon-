@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import Response
 
-from review_room.agent import CodexAppServerAgent
+from review_room.agent import CodeAgent, CodexAppServerAgentPool
 from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
 from review_room.init_threads import configured_init_thread_prompts, ensure_init_threads
@@ -47,7 +48,7 @@ from review_room.threads import new_thread_id, run_review_thread, run_thread_fol
 store = ReviewStore()
 github = GitHubClient()
 checkout = RepoCheckoutService(store.workspace_dir)
-agent = CodexAppServerAgent()
+agent = CodexAppServerAgentPool()
 HOME_ENV_PATH = Path.home() / ".env"
 
 
@@ -179,8 +180,14 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     store.save(session)
-    for thread in created_init_threads:
-        background_tasks.add_task(run_review_thread, store, agent, session.id, thread.id)
+    if created_init_threads:
+        background_tasks.add_task(
+            run_review_threads,
+            store,
+            agent,
+            session.id,
+            [thread.id for thread in created_init_threads],
+        )
 
     return CreateReviewResponse(
         review_id=session.id,
@@ -190,6 +197,10 @@ async def create_review(request: CreateReviewRequest, background_tasks: Backgrou
         comments=session.comments,
         submission=session.submission,
     )
+
+
+async def run_review_threads(store: ReviewStore, agent: CodeAgent, review_id: str, thread_ids: list[str]) -> None:
+    await asyncio.gather(*(run_review_thread(store, agent, review_id, thread_id) for thread_id in thread_ids))
 
 
 @app.get("/api/reviews/{review_id}", response_model=ReviewSession)
