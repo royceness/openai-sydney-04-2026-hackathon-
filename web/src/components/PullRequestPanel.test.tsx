@@ -19,6 +19,7 @@ describe("PullRequestPanel", () => {
           base_sha: "abc",
           head_sha: "def",
         }}
+        selection={null}
       />,
     );
 
