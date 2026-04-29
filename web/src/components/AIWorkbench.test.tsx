@@ -23,7 +23,7 @@ describe("AIWorkbench", () => {
 
   it("submits a manual question", async () => {
     const onAsk = vi.fn().mockResolvedValue(undefined);
-    render(<AIWorkbench comments={[]} pendingCommentBody={null} onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
+    render(<AIWorkbench onDeleteComment={vi.fn()} comments={[]} pendingCommentBody={null} onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
 
     await userEvent.type(screen.getByPlaceholderText("Ask about selected code..."), "Explain this function");
     await userEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -35,6 +35,7 @@ describe("AIWorkbench", () => {
     render(
       <AIWorkbench
         comments={[]}
+        onDeleteComment={vi.fn()}
         pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
@@ -77,6 +78,7 @@ describe("AIWorkbench", () => {
             },
           },
         ]}
+        onDeleteComment={vi.fn()}
         pendingCommentBody="add null input coverage"
         onAsk={vi.fn()}
         selection={null}
@@ -92,10 +94,44 @@ describe("AIWorkbench", () => {
     expect(screen.getByText("this needs tests")).toBeInTheDocument();
   });
 
+  it("deletes a local PR comment draft", async () => {
+    const onDeleteComment = vi.fn(() => ({ status: "deleted" as const }));
+    render(
+      <AIWorkbench
+        comments={[
+          {
+            id: "draft_1",
+            body: "this needs tests",
+            status: "draft",
+            created_at: "2026-04-29T00:00:00Z",
+            context: {
+              filePath: "README",
+              side: "new",
+              startLine: 1,
+              endLine: 1,
+              selectedText: "",
+            },
+          },
+        ]}
+        onDeleteComment={onDeleteComment}
+        pendingCommentBody={null}
+        onAsk={vi.fn()}
+        selection={null}
+        threadError={null}
+        threads={[]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete draft comment at README:L1" }));
+
+    expect(onDeleteComment).toHaveBeenCalledWith("draft_1");
+  });
+
   it("collapses and reopens thread output", async () => {
     render(
       <AIWorkbench
         comments={[]}
+        onDeleteComment={vi.fn()}
         pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
@@ -134,6 +170,7 @@ describe("AIWorkbench", () => {
     const { rerender } = render(
       <AIWorkbench
         comments={[]}
+        onDeleteComment={vi.fn()}
         pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}
@@ -158,6 +195,7 @@ describe("AIWorkbench", () => {
     rerender(
       <AIWorkbench
         comments={[]}
+        onDeleteComment={vi.fn()}
         pendingCommentBody={null}
         onAsk={vi.fn()}
         selection={null}

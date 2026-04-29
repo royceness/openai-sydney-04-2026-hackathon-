@@ -27,6 +27,7 @@ export default function App() {
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [pendingCommentBody, setPendingCommentBody] = useState<string | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
+  const commentsRef = useRef<DraftComment[]>([]);
 
   const loadReview = useCallback(async (prUrl: string) => {
     setLoadState("loading");
@@ -132,6 +133,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    commentsRef.current = comments;
+  }, [comments]);
+
+  useEffect(() => {
     if (!pendingCommentBody || !selection) {
       return;
     }
@@ -222,6 +227,28 @@ export default function App() {
     [addDraftComment],
   );
 
+  const handleEditComment = useCallback((commentId: string, body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed) {
+      return { status: "empty" as const };
+    }
+    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+      return { status: "not-found" as const };
+    }
+    setComments((current) =>
+      current.map((comment) => (comment.id === commentId ? { ...comment, body: trimmed } : comment)),
+    );
+    return { status: "updated" as const };
+  }, []);
+
+  const handleDeleteComment = useCallback((commentId: string) => {
+    if (!commentsRef.current.some((comment) => comment.id === commentId)) {
+      return { status: "not-found" as const };
+    }
+    setComments((current) => current.filter((comment) => comment.id !== commentId));
+    return { status: "deleted" as const };
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -245,7 +272,13 @@ export default function App() {
         }}
       />
       <main className="flex min-w-[38rem] flex-1 flex-col border-x border-slate-800/80">
-        <PullRequestPanel pr={review.pr} selection={selection} onDraftComment={handleDraftComment} />
+        <PullRequestPanel
+          pr={review.pr}
+          selection={selection}
+          onDeleteComment={handleDeleteComment}
+          onDraftComment={handleDraftComment}
+          onEditComment={handleEditComment}
+        />
         <DiffPane
           filePath={activeFile}
           diff={activeDiff}
@@ -261,6 +294,7 @@ export default function App() {
         selection={selection}
         threadError={threadError}
         onAsk={handleAsk}
+        onDeleteComment={handleDeleteComment}
       />
     </div>
   );

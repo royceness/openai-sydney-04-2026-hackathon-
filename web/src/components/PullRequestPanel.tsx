@@ -4,11 +4,15 @@ import { VoiceSelectionDemo } from "./VoiceSelectionDemo";
 export function PullRequestPanel({
   pr,
   selection,
+  onDeleteComment,
   onDraftComment,
+  onEditComment,
 }: {
   pr: PullRequestInfo;
   selection: CodeSelection | null;
+  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
   onDraftComment: (body: string) => { status: "created" | "selection-required" | "empty" };
+  onEditComment: (commentId: string, body: string) => { status: "updated" | "not-found" | "empty" };
 }) {
   return (
     <section className="border-b border-slate-800 bg-[#0b0e14] p-5">
@@ -28,7 +32,12 @@ export function PullRequestPanel({
           </div>
           <h1 className="mt-3 text-xl font-semibold text-white">{pr.title}</h1>
         </div>
-        <VoiceSelectionDemo selection={selection} onDraftComment={onDraftComment} />
+        <VoiceSelectionDemo
+          selection={selection}
+          onDeleteComment={onDeleteComment}
+          onDraftComment={onDraftComment}
+          onEditComment={onEditComment}
+        />
       </div>
       {pr.body ? (
         <div className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-slate-300">{pr.body}</div>

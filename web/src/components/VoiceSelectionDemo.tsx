@@ -9,13 +9,19 @@ import { z } from "zod";
 import type { CodeSelection } from "../types";
 
 type DraftCommentResult = { status: "created" | "selection-required" | "empty" };
+type EditCommentResult = { status: "updated" | "not-found" | "empty" };
+type DeleteCommentResult = { status: "deleted" | "not-found" };
 
 export function VoiceSelectionDemo({
   selection,
+  onDeleteComment,
   onDraftComment,
+  onEditComment,
 }: {
   selection: CodeSelection | null;
+  onDeleteComment: (commentId: string) => DeleteCommentResult;
   onDraftComment: (body: string) => DraftCommentResult;
+  onEditComment: (commentId: string, body: string) => EditCommentResult;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [popupText, setPopupText] = useState<string | null>(null);
@@ -66,8 +72,52 @@ export function VoiceSelectionDemo({
           return { ok: false, status: "empty" };
         },
       }),
+      defineVoiceTool({
+        name: "edit_selected_pr_comment",
+        description: "Edit the local draft PR comment whose text is currently selected in the PR comments queue.",
+        parameters: z.object({
+          comment: z.string().describe("The replacement PR review comment body."),
+        }),
+        execute: ({ comment }) => {
+          const commentId = selectedDraftCommentId();
+          if (!commentId) {
+            setPopupText("Select text inside a draft PR comment first.");
+            return { ok: true, status: "comment-selection-required" };
+          }
+          const result = onEditComment(commentId, comment);
+          if (result.status === "updated") {
+            setPopupText("Draft comment updated.");
+            return { ok: true, status: "updated" };
+          }
+          if (result.status === "empty") {
+            setPopupText("No replacement comment text was provided.");
+            return { ok: false, status: "empty" };
+          }
+          setPopupText("Selected draft comment was not found.");
+          return { ok: false, status: "not-found" };
+        },
+      }),
+      defineVoiceTool({
+        name: "delete_selected_pr_comment",
+        description: "Delete the local draft PR comment whose text is currently selected in the PR comments queue.",
+        parameters: z.object({}),
+        execute: () => {
+          const commentId = selectedDraftCommentId();
+          if (!commentId) {
+            setPopupText("Select text inside a draft PR comment first.");
+            return { ok: true, status: "comment-selection-required" };
+          }
+          const result = onDeleteComment(commentId);
+          if (result.status === "deleted") {
+            setPopupText("Draft comment deleted.");
+            return { ok: true, status: "deleted" };
+          }
+          setPopupText("Selected draft comment was not found.");
+          return { ok: false, status: "not-found" };
+        },
+      }),
     ],
-    [onDraftComment],
+    [onDeleteComment, onDraftComment, onEditComment],
   );
 
   const [controller] = useState<VoiceControlController>(() =>
@@ -75,23 +125,23 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here. Extract the requested comment text into the comment parameter. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. For any unclear, noisy, partial, unrelated, ambiguous audio, or case where no UI action is required, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call draft_pr_comment when the user asks to add, draft, write, or create a PR comment, review comment, or comment here. Extract the requested comment text into the comment parameter. When the user selects text inside a draft PR comment and asks to edit it, call edit_selected_pr_comment with the replacement text. When the user selects text inside a draft PR comment and asks to delete it, call delete_selected_pr_comment. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. For any unclear, noisy, partial, unrelated, ambiguous audio, or case where no UI action is required, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onError: (voiceError) => {
         console.error("[voice] error", voiceError);
         setError(voiceError.message);
       },
       onToolError: (call) => {
-        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment" || call.name === "edit_selected_pr_comment" || call.name === "delete_selected_pr_comment") {
           console.error("[voice] tool error", call);
         }
       },
       onToolStart: (call) => {
-        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment" || call.name === "edit_selected_pr_comment" || call.name === "delete_selected_pr_comment") {
           console.info("[voice] tool start", call);
         }
       },
       onToolSuccess: (call) => {
-        if (call.name === "show_selected_text" || call.name === "draft_pr_comment") {
+        if (call.name === "show_selected_text" || call.name === "draft_pr_comment" || call.name === "edit_selected_pr_comment" || call.name === "delete_selected_pr_comment") {
           console.info("[voice] tool success", call);
         }
       },
@@ -214,4 +264,17 @@ export function selectedLocationMessage(selection: CodeSelection | null) {
   }
   const lineLabel = startLine === endLine ? `Line ${startLine}` : `Lines ${startLine}-${endLine}`;
   return `${lineLabel} of ${selection.filePath}`;
+}
+
+function selectedDraftCommentId() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) {
+    return null;
+  }
+  return closestCommentId(selection.anchorNode) ?? closestCommentId(selection.focusNode);
+}
+
+function closestCommentId(node: Node | null) {
+  const element = node instanceof Element ? node : node?.parentElement;
+  return element?.closest<HTMLElement>("[data-comment-id]")?.dataset.commentId ?? null;
 }

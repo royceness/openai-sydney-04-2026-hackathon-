@@ -10,6 +10,7 @@ export function AIWorkbench({
   selection,
   threadError,
   onAsk,
+  onDeleteComment,
 }: {
   comments: DraftComment[];
   pendingCommentBody: string | null;
@@ -17,6 +18,7 @@ export function AIWorkbench({
   selection: CodeSelection | null;
   threadError: string | null;
   onAsk: (utterance: string) => Promise<void>;
+  onDeleteComment: (commentId: string) => { status: "deleted" | "not-found" };
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -91,9 +93,22 @@ export function AIWorkbench({
                 <div className="rounded-md border border-slate-800 bg-slate-950 p-3" key={comment.id}>
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 truncate text-xs font-semibold text-violet-200">{formatCommentLocation(comment.context)}</div>
-                    <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{comment.status}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{comment.status}</span>
+                      <button
+                        aria-label={`Delete draft comment at ${formatCommentLocation(comment.context)}`}
+                        className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
+                        onClick={() => onDeleteComment(comment.id)}
+                        title="Delete draft comment"
+                        type="button"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">{comment.body}</div>
+                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200" data-comment-id={comment.id}>
+                    {comment.body}
+                  </div>
                 </div>
               ))}
             </div>
@@ -235,4 +250,16 @@ function formatCommentLocation(selection: CodeSelection) {
     return selection.filePath;
   }
   return start === end ? `${selection.filePath}:L${start}` : `${selection.filePath}:L${start}-L${end}`;
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 15h10l1-15" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
 }

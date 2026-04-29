@@ -6,6 +6,8 @@ describe("PullRequestPanel", () => {
   it("renders PR identity, branches, author, and body", () => {
     render(
       <PullRequestPanel
+        onDeleteComment={vi.fn()}
+        onEditComment={vi.fn()}
         pr={{
           owner: "acme",
           repo: "review-room",
