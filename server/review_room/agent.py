@@ -49,7 +49,12 @@ class CodexAppServerAgent:
             return AgentResult(codex_thread_id=codex_thread_id, markdown=markdown)
 
     async def close(self) -> None:
-        await self._terminate()
+        async with self._lock:
+            await self._terminate()
+
+    async def start(self) -> None:
+        async with self._lock:
+            await self._ensure_started()
 
     async def _ensure_started(self) -> None:
         if self._proc is not None and self._proc.returncode is None:

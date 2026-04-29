@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -24,7 +26,30 @@ from review_room.store import ReviewStore, stable_review_id
 from review_room.threads import new_thread_id, run_review_thread
 
 
-app = FastAPI(title="Review Room API")
+store = ReviewStore()
+github = GitHubClient()
+checkout = RepoCheckoutService(store.workspace_dir)
+agent = CodexAppServerAgent()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    if should_warm_codex_on_startup():
+        await agent.start()
+    try:
+        yield
+    finally:
+        await agent.close()
+
+
+def should_warm_codex_on_startup() -> bool:
+    configured = os.environ.get("REVIEW_ROOM_WARM_CODEX_ON_STARTUP")
+    if configured is not None:
+        return configured.lower() not in {"0", "false", "no"}
+    return "PYTEST_CURRENT_TEST" not in os.environ
+
+
+app = FastAPI(title="Review Room API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -32,11 +57,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-store = ReviewStore()
-github = GitHubClient()
-checkout = RepoCheckoutService(store.workspace_dir)
-agent = CodexAppServerAgent()
 
 
 @app.get("/api/bootstrap", response_model=BootstrapResponse)

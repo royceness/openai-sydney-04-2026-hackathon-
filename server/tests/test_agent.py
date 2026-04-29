@@ -47,6 +47,27 @@ async def test_codex_agent_reuses_one_app_server_process(monkeypatch, tmp_path: 
     ]
 
 
+@pytest.mark.asyncio
+async def test_codex_agent_can_start_before_first_thread(monkeypatch, tmp_path: Path) -> None:
+    created_processes: list[FakeProcess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        process = FakeProcess()
+        created_processes.append(process)
+        return process
+
+    monkeypatch.setattr("review_room.agent.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    agent = CodexAppServerAgent(command="codex")
+
+    await agent.start()
+    result = await agent.run_thread(str(tmp_path), "First", "First prompt")
+
+    assert result.markdown == "First response"
+    assert len(created_processes) == 1
+    sent_methods = [message["method"] for message in created_processes[0].stdin.messages]
+    assert sent_methods == ["initialize", "thread/start", "turn/start"]
+
+
 class FakeStdin:
     def __init__(self) -> None:
         self.messages: list[dict] = []
