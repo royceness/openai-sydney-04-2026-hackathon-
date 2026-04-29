@@ -1,4 +1,4 @@
-import type { CodeSelection, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession, ReviewThread } from "./types";
+import type { CodeSelection, CreateFollowUpResponse, CreateReviewResponse, CreateThreadResponse, FileDiffResponse, ReviewSession, ReviewThread } from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -59,4 +59,29 @@ export async function createThread({
     }),
   });
   return readJson<CreateThreadResponse>(response);
+}
+
+export async function createFollowUp({
+  reviewId,
+  threadId,
+  source = "manual",
+  utterance,
+}: {
+  reviewId: string;
+  threadId: string;
+  source?: "voice" | "manual";
+  utterance: string;
+}): Promise<CreateFollowUpResponse> {
+  const response = await fetch(
+    `/api/reviews/${encodeURIComponent(reviewId)}/threads/${encodeURIComponent(threadId)}/followups`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source,
+        utterance,
+      }),
+    },
+  );
+  return readJson<CreateFollowUpResponse>(response);
 }

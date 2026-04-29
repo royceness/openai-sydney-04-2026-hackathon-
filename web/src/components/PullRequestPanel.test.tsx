@@ -20,10 +20,13 @@ describe("PullRequestPanel", () => {
           head_sha: "def",
         }}
         activeFile={null}
+        activeThreadId={null}
         files={[]}
         onAsk={async () => undefined}
+        onFollowUp={async () => undefined}
         onNavigateFile={() => undefined}
         selection={null}
+        threads={[]}
       />,
     );
 

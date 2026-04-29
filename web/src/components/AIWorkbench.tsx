@@ -4,15 +4,21 @@ import type { CodeSelection, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
 export function AIWorkbench({
+  activeThreadId,
   threads,
   selection,
   threadError,
+  onActivateThread,
   onAsk,
+  onFollowUp,
 }: {
+  activeThreadId: string | null;
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
+  onActivateThread: (threadId: string) => void;
   onAsk: (utterance: string) => Promise<void>;
+  onFollowUp: (threadId: string, utterance: string) => Promise<void>;
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -89,15 +95,29 @@ export function AIWorkbench({
         ) : (
           threads.map((thread) => {
             const isOpen = openThreadIds.has(thread.id);
+            const isActive = activeThreadId === thread.id;
 
             return (
-              <article className="mb-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950" key={thread.id}>
+              <article
+                className={
+                  isActive
+                    ? "mb-3 overflow-hidden rounded-lg border border-violet-500/70 bg-slate-950 shadow-lg shadow-violet-950/30"
+                    : "mb-3 overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+                }
+                key={thread.id}
+              >
                 <button
                   aria-expanded={isOpen}
+                  aria-pressed={isActive}
                   className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-slate-900/70"
                   onClick={() => {
+                    onActivateThread(thread.id);
                     setOpenThreadIds((current) => {
                       const next = new Set(current);
+                      if (!isActive) {
+                        next.add(thread.id);
+                        return next;
+                      }
                       if (next.has(thread.id)) {
                         next.delete(thread.id);
                       } else {
@@ -119,6 +139,7 @@ export function AIWorkbench({
                     ) : null}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    {isActive ? <span className="rounded bg-violet-500/10 px-2 py-1 text-xs text-violet-200">voice context</span> : null}
                     <span className={statusClass(thread.status)}>{thread.status}</span>
                     <span aria-hidden="true" className="w-3 text-center text-sm text-slate-500">
                       {isOpen ? "-" : "+"}
@@ -150,6 +171,12 @@ export function AIWorkbench({
                         </ReactMarkdown>
                       </div>
                     ) : null}
+                    {isActive ? (
+                      <FollowUpForm
+                        onSubmit={(utterance) => onFollowUp(thread.id, utterance)}
+                        disabled={thread.status === "queued" || thread.status === "running"}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
               </article>
@@ -158,6 +185,49 @@ export function AIWorkbench({
         )}
       </div>
     </aside>
+  );
+}
+
+function FollowUpForm({
+  disabled,
+  onSubmit,
+}: {
+  disabled: boolean;
+  onSubmit: (utterance: string) => Promise<void>;
+}) {
+  const [utterance, setUtterance] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  return (
+    <form
+      className="mt-3 flex gap-2 border-t border-slate-800 pt-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const trimmed = utterance.trim();
+        if (!trimmed) {
+          return;
+        }
+        setSubmitting(true);
+        void onSubmit(trimmed)
+          .then(() => setUtterance(""))
+          .finally(() => setSubmitting(false));
+      }}
+    >
+      <input
+        className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-violet-500/30 placeholder:text-slate-600 focus:ring-4"
+        disabled={disabled || submitting}
+        onChange={(event) => setUtterance(event.target.value)}
+        placeholder="Ask a follow-up..."
+        value={utterance}
+      />
+      <button
+        className="rounded-md bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!utterance.trim() || disabled || submitting}
+        type="submit"
+      >
+        {submitting ? "Asking" : "Follow up"}
+      </button>
+    </form>
   );
 }
 

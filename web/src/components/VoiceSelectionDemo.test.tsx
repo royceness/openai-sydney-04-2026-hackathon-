@@ -1,8 +1,14 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChangedFile, CodeSelection } from "../types";
-import { resolveFileNavigation, selectedLocationMessage, VoiceSelectionDemo } from "./VoiceSelectionDemo";
+import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
+import {
+  buildReviewRoomContext,
+  resolveFileNavigation,
+  resolveFollowUpThread,
+  selectedLocationMessage,
+  VoiceSelectionDemo,
+} from "./VoiceSelectionDemo";
 
 type VoiceToolOption = {
   name: string;
@@ -14,6 +20,7 @@ type VoiceControllerOptions = {
   auth: unknown;
   onEvent?: (event: Record<string, unknown>) => void;
   outputMode: string;
+  postToolResponse?: boolean;
   tools: VoiceToolOption[];
 };
 
@@ -61,26 +68,47 @@ const changedFiles: ChangedFile[] = [
   },
 ];
 
+const completedThread: ReviewThread = {
+  id: "thr_issue",
+  source: "manual",
+  title: "Found issue",
+  status: "complete",
+  codex_thread_id: "codex-thread-1",
+  markdown: "This thread found a validation issue.",
+  context: selectedCode,
+  created_at: "2026-04-29T00:00:00Z",
+  updated_at: "2026-04-29T00:00:00Z",
+};
+
 function renderVoiceSelectionDemo({
   activeFile = "src/review/diagram.ts",
+  activeThreadId = "thr_issue",
   files = changedFiles,
   onAsk = vi.fn(() => Promise.resolve()),
+  onFollowUp = vi.fn(() => Promise.resolve()),
   onNavigateFile = vi.fn(),
   selection = selectedCode,
+  threads = [completedThread],
 }: {
   activeFile?: string | null;
+  activeThreadId?: string | null;
   files?: ChangedFile[];
   onAsk?: (utterance: string) => Promise<void>;
+  onFollowUp?: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile?: (filePath: string) => void;
   selection?: CodeSelection | null;
+  threads?: ReviewThread[];
 } = {}) {
   render(
     <VoiceSelectionDemo
       activeFile={activeFile}
+      activeThreadId={activeThreadId}
       files={files}
       onAsk={onAsk}
+      onFollowUp={onFollowUp}
       onNavigateFile={onNavigateFile}
       selection={selection}
+      threads={threads}
     />,
   );
   const options = createVoiceControlController.mock.calls[0]?.[0];
@@ -119,6 +147,31 @@ describe("VoiceSelectionDemo", () => {
     });
   });
 
+  it("builds voice page context from selected code and focused thread", () => {
+    const context = buildReviewRoomContext({
+      activeFile: "src/review/diagram.ts",
+      activeThreadId: "thr_issue",
+      selection: selectedCode,
+      threads: [completedThread],
+    });
+
+    expect(context.selectedCode).toEqual(selectedCode);
+    expect(context.activeThread?.title).toBe("Found issue");
+    expect(context.activeThread?.markdownExcerpt).toContain("validation issue");
+    expect(context.popupText).toContain("Focused thread: Found issue");
+  });
+
+  it("resolves follow-up target from the focused Codex thread", () => {
+    expect(resolveFollowUpThread(undefined, "thr_issue", [completedThread])).toEqual({
+      ok: true,
+      thread: completedThread,
+    });
+    expect(resolveFollowUpThread(undefined, null, [completedThread])).toEqual({
+      ok: false,
+      message: "Click the relevant Codex thread, then ask the follow-up again.",
+    });
+  });
+
   it("configures the realtime voice component with the selected-text tool", () => {
     renderVoiceSelectionDemo();
 
@@ -139,9 +192,16 @@ describe("VoiceSelectionDemo", () => {
             name: "ask_general_question",
           }),
           expect.objectContaining({
+            name: "ask_thread_follow_up",
+          }),
+          expect.objectContaining({
+            name: "get_review_room_context",
+          }),
+          expect.objectContaining({
             name: "navigate_file",
           }),
         ]),
+        postToolResponse: true,
       }),
     );
     expect(screen.getByRole("button", { name: "Start Voice" })).toBeInTheDocument();
@@ -206,6 +266,35 @@ describe("VoiceSelectionDemo", () => {
 
     expect(onAsk).toHaveBeenCalledWith("What is the risk in this PR?");
     expect(await screen.findByText("Thread started")).toBeInTheDocument();
+  });
+
+  it("posts a follow-up to the focused thread when the realtime tool executes", async () => {
+    const onFollowUp = vi.fn(() => Promise.resolve());
+    const options = renderVoiceSelectionDemo({ onFollowUp });
+    const askThreadFollowUp = options.tools.find((tool) => tool.name === "ask_thread_follow_up");
+    if (!askThreadFollowUp) {
+      throw new Error("Expected follow-up voice tool");
+    }
+
+    await askThreadFollowUp.execute({ question: "What test would catch this?" });
+
+    expect(onFollowUp).toHaveBeenCalledWith("thr_issue", "What test would catch this?");
+    expect(await screen.findByText("Follow-up started")).toBeInTheDocument();
+  });
+
+  it("prompts for a focused thread when a follow-up target is ambiguous", async () => {
+    const onFollowUp = vi.fn(() => Promise.resolve());
+    const options = renderVoiceSelectionDemo({ activeThreadId: null, onFollowUp });
+    const askThreadFollowUp = options.tools.find((tool) => tool.name === "ask_thread_follow_up");
+    if (!askThreadFollowUp) {
+      throw new Error("Expected follow-up voice tool");
+    }
+
+    await askThreadFollowUp.execute({ question: "What test would catch this?" });
+
+    expect(onFollowUp).not.toHaveBeenCalled();
+    expect(await screen.findByText("Choose a thread")).toBeInTheDocument();
+    expect(screen.getByText("Click the relevant Codex thread, then ask the follow-up again.")).toBeInTheDocument();
   });
 
   it("navigates to the next and named files when the realtime tool executes", async () => {

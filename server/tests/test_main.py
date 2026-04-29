@@ -53,6 +53,15 @@ class FakeAgent:
             await on_delta("the selected input.")
         return AgentResult(codex_thread_id="codex-thread-1", markdown="This function validates the selected input.")
 
+    async def continue_thread(self, repo_path: str, codex_thread_id: str, prompt: str, on_delta=None) -> AgentResult:
+        assert repo_path == "/tmp/review-room/repos/acme/review-room/worktrees/pr-247"
+        assert codex_thread_id == "codex-thread-1"
+        assert "Follow-up question from the reviewer:" in prompt
+        if on_delta is not None:
+            await on_delta("The follow-up answer cites ")
+            await on_delta("the same issue.")
+        return AgentResult(codex_thread_id=codex_thread_id, markdown="The follow-up answer cites the same issue.")
+
 
 class FakeAsyncClient:
     requests: list[dict[str, object]] = []
@@ -137,6 +146,42 @@ def test_create_thread_runs_agent_and_persists_markdown(tmp_path: Path, monkeypa
     assert thread["status"] == "complete"
     assert thread["codex_thread_id"] == "codex-thread-1"
     assert thread["markdown"] == "This function validates the selected input."
+
+
+def test_create_follow_up_continues_existing_codex_thread(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "store", ReviewStore(tmp_path / ".review-room"))
+    monkeypatch.setattr(main, "github", FakeGitHubClient())
+    monkeypatch.setattr(main, "checkout", FakeCheckoutService())
+    monkeypatch.setattr(main, "agent", FakeAgent())
+    client = TestClient(main.app)
+    create_response = client.post("/api/reviews", json={"pr_url": "https://github.com/acme/review-room/pull/247"})
+    review_id = create_response.json()["review_id"]
+    thread_response = client.post(
+        f"/api/reviews/{review_id}/threads",
+        json={
+            "source": "manual",
+            "title": "Explain this function",
+            "utterance": "Explain this function",
+            "context": None,
+        },
+    )
+    thread_id = thread_response.json()["thread_id"]
+
+    follow_up_response = client.post(
+        f"/api/reviews/{review_id}/threads/{thread_id}/followups",
+        json={"source": "voice", "utterance": "What test would catch it?"},
+    )
+
+    assert follow_up_response.status_code == 200
+    assert follow_up_response.json() == {"thread_id": thread_id, "status": "queued"}
+    session_response = client.get(f"/api/reviews/{review_id}")
+    thread = next(item for item in session_response.json()["threads"] if item["id"] == thread_id)
+    assert thread["status"] == "complete"
+    assert thread["codex_thread_id"] == "codex-thread-1"
+    assert "This function validates the selected input." in thread["markdown"]
+    assert "### Follow-up" in thread["markdown"]
+    assert "**Question:** What test would catch it?" in thread["markdown"]
+    assert "The follow-up answer cites the same issue." in thread["markdown"]
 
 
 def test_create_review_preserves_existing_threads(tmp_path: Path, monkeypatch) -> None:

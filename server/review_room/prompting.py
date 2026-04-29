@@ -48,6 +48,15 @@ Instructions:
 """
 
 
+def build_follow_up_prompt(utterance: str) -> str:
+    return f"""Follow-up question from the reviewer:
+"{utterance}"
+
+Answer this as a continuation of the current Review Room thread. Use the prior thread context and the
+repository as needed. Keep the answer focused on the follow-up question.
+"""
+
+
 def _selected_lines(context: CodeSelection) -> str:
     if context.start_line is None or context.end_line is None:
         return "unknown"

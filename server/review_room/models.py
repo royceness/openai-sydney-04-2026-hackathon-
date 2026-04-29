@@ -107,3 +107,13 @@ class CreateThreadRequest(BaseModel):
 class CreateThreadResponse(BaseModel):
     thread_id: str
     status: Literal["queued", "running", "complete", "failed"]
+
+
+class CreateFollowUpRequest(BaseModel):
+    source: Literal["voice", "manual"] = "manual"
+    utterance: str
+
+
+class CreateFollowUpResponse(BaseModel):
+    thread_id: str
+    status: Literal["queued", "running", "complete", "failed"]

@@ -12,6 +12,21 @@ vi.mock("mermaid", () => ({
   },
 }));
 
+function renderWorkbench(props: Partial<Parameters<typeof AIWorkbench>[0]> = {}) {
+  return render(
+    <AIWorkbench
+      activeThreadId={null}
+      onActivateThread={vi.fn()}
+      onAsk={vi.fn()}
+      onFollowUp={vi.fn()}
+      selection={null}
+      threadError={null}
+      threads={[]}
+      {...props}
+    />,
+  );
+}
+
 describe("AIWorkbench", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -23,7 +38,7 @@ describe("AIWorkbench", () => {
 
   it("submits a manual question", async () => {
     const onAsk = vi.fn().mockResolvedValue(undefined);
-    render(<AIWorkbench onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
+    renderWorkbench({ onAsk });
 
     await userEvent.type(screen.getByPlaceholderText("Ask about selected code..."), "Explain this function");
     await userEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -32,24 +47,19 @@ describe("AIWorkbench", () => {
   });
 
   it("renders completed markdown thread output", () => {
-    render(
-      <AIWorkbench
-        onAsk={vi.fn()}
-        selection={null}
-        threadError={null}
-        threads={[
-          {
-            id: "thr_1",
-            source: "manual",
-            title: "Diagram this flow",
-            status: "complete",
-            markdown: "Uses `buildDiagram`.\n\n```mermaid\nflowchart LR\nA --> B\n```",
-            created_at: "2026-04-29T00:00:00Z",
-            updated_at: "2026-04-29T00:00:00Z",
-          },
-        ]}
-      />,
-    );
+    renderWorkbench({
+      threads: [
+        {
+          id: "thr_1",
+          source: "manual",
+          title: "Diagram this flow",
+          status: "complete",
+          markdown: "Uses `buildDiagram`.\n\n```mermaid\nflowchart LR\nA --> B\n```",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+      ],
+    });
 
     expect(screen.getByText("Diagram this flow")).toBeInTheDocument();
     expect(screen.getByText("complete")).toBeInTheDocument();
@@ -58,24 +68,20 @@ describe("AIWorkbench", () => {
   });
 
   it("collapses and reopens thread output", async () => {
-    render(
-      <AIWorkbench
-        onAsk={vi.fn()}
-        selection={null}
-        threadError={null}
-        threads={[
-          {
-            id: "thr_1",
-            source: "manual",
-            title: "Explain this function",
-            status: "complete",
-            markdown: "This is the thread body.",
-            created_at: "2026-04-29T00:00:00Z",
-            updated_at: "2026-04-29T00:00:00Z",
-          },
-        ]}
-      />,
-    );
+    renderWorkbench({
+      activeThreadId: "thr_1",
+      threads: [
+        {
+          id: "thr_1",
+          source: "manual",
+          title: "Explain this function",
+          status: "complete",
+          markdown: "This is the thread body.",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+      ],
+    });
 
     const header = screen.getByRole("button", { name: /Explain this function/ });
 
@@ -94,31 +100,30 @@ describe("AIWorkbench", () => {
   });
 
   it("keeps a collapsed thread closed when thread content streams in", async () => {
-    const { rerender } = render(
-      <AIWorkbench
-        onAsk={vi.fn()}
-        selection={null}
-        threadError={null}
-        threads={[
-          {
-            id: "thr_1",
-            source: "manual",
-            title: "Explain this function",
-            status: "running",
-            markdown: "Initial body.",
-            created_at: "2026-04-29T00:00:00Z",
-            updated_at: "2026-04-29T00:00:00Z",
-          },
-        ]}
-      />,
-    );
+    const { rerender } = renderWorkbench({
+      activeThreadId: "thr_1",
+      threads: [
+        {
+          id: "thr_1",
+          source: "manual",
+          title: "Explain this function",
+          status: "running",
+          markdown: "Initial body.",
+          created_at: "2026-04-29T00:00:00Z",
+          updated_at: "2026-04-29T00:00:00Z",
+        },
+      ],
+    });
 
     const header = screen.getByRole("button", { name: /Explain this function/ });
     await userEvent.click(header);
 
     rerender(
       <AIWorkbench
+        activeThreadId={null}
+        onActivateThread={vi.fn()}
         onAsk={vi.fn()}
+        onFollowUp={vi.fn()}
         selection={null}
         threadError={null}
         threads={[
@@ -137,5 +142,50 @@ describe("AIWorkbench", () => {
 
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Updated streamed body.")).not.toBeInTheDocument();
+  });
+
+  it("marks a clicked thread as voice context and submits a follow-up", async () => {
+    const onActivateThread = vi.fn();
+    const onFollowUp = vi.fn().mockResolvedValue(undefined);
+    const thread = {
+      id: "thr_1",
+      source: "manual" as const,
+      title: "Found issue",
+      status: "complete" as const,
+      markdown: "This thread found an issue.",
+      codex_thread_id: "codex-thread-1",
+      created_at: "2026-04-29T00:00:00Z",
+      updated_at: "2026-04-29T00:00:00Z",
+    };
+    const { rerender } = renderWorkbench({
+      activeThreadId: null,
+      onActivateThread,
+      onFollowUp,
+      threads: [thread],
+    });
+
+    const header = screen.getByRole("button", { name: /Found issue/ });
+    await userEvent.click(header);
+    expect(onActivateThread).toHaveBeenCalledWith("thr_1");
+
+    rerender(
+      <AIWorkbench
+        activeThreadId="thr_1"
+        onActivateThread={onActivateThread}
+        onAsk={vi.fn()}
+        onFollowUp={onFollowUp}
+        selection={null}
+        threadError={null}
+        threads={[thread]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Found issue/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("voice context")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText("Ask a follow-up..."), "What test catches this?");
+    await userEvent.click(screen.getByRole("button", { name: "Follow up" }));
+
+    expect(onFollowUp).toHaveBeenCalledWith("thr_1", "What test catches this?");
   });
 });

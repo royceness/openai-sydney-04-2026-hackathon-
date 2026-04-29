@@ -17,6 +17,8 @@ from review_room.checkout import CheckoutError, RepoCheckoutService
 from review_room.github import GitHubClient, GitHubError, parse_pr_url
 from review_room.models import (
     BootstrapResponse,
+    CreateFollowUpRequest,
+    CreateFollowUpResponse,
     CreateReviewRequest,
     CreateReviewResponse,
     CreateThreadRequest,
@@ -25,9 +27,9 @@ from review_room.models import (
     ReviewSession,
     ReviewThread,
 )
-from review_room.prompting import build_review_prompt
+from review_room.prompting import build_follow_up_prompt, build_review_prompt
 from review_room.store import ReviewStore, stable_review_id
-from review_room.threads import new_thread_id, run_review_thread
+from review_room.threads import new_thread_id, run_review_thread, run_thread_follow_up
 
 
 store = ReviewStore()
@@ -211,3 +213,31 @@ async def create_thread(
     store.save(session)
     background_tasks.add_task(run_review_thread, store, agent, review_id, thread.id)
     return CreateThreadResponse(thread_id=thread.id, status=thread.status)
+
+
+@app.post("/api/reviews/{review_id}/threads/{thread_id}/followups", response_model=CreateFollowUpResponse)
+async def create_follow_up(
+    review_id: str,
+    thread_id: str,
+    request: CreateFollowUpRequest,
+    background_tasks: BackgroundTasks,
+) -> CreateFollowUpResponse:
+    try:
+        session = store.get(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review session not found") from exc
+
+    thread = next((item for item in session.threads if item.id == thread_id), None)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Review thread not found")
+    if thread.status in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Review thread is still running")
+    if thread.codex_thread_id is None:
+        raise HTTPException(status_code=409, detail="Review thread has no Codex thread id")
+
+    thread.status = "queued"
+    thread.updated_at = datetime.now(timezone.utc)
+    store.save(session)
+    prompt = build_follow_up_prompt(request.utterance)
+    background_tasks.add_task(run_thread_follow_up, store, agent, review_id, thread.id, prompt, request.utterance)
+    return CreateFollowUpResponse(thread_id=thread.id, status=thread.status)

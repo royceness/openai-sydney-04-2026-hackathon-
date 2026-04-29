@@ -7,7 +7,7 @@ import {
   type VoiceControlController,
 } from "realtime-voice-component";
 import { z } from "zod";
-import type { ChangedFile, CodeSelection } from "../types";
+import type { ChangedFile, CodeSelection, ReviewThread } from "../types";
 
 type VoicePopup = {
   title: string;
@@ -26,31 +26,44 @@ type FileNavigationRequest =
 
 export function VoiceSelectionDemo({
   activeFile,
+  activeThreadId,
   files,
   onAsk,
+  onFollowUp,
   onNavigateFile,
   selection,
+  threads,
 }: {
   activeFile: string | null;
+  activeThreadId: string | null;
   files: ChangedFile[];
   onAsk: (utterance: string) => Promise<void>;
+  onFollowUp: (threadId: string, utterance: string) => Promise<void>;
   onNavigateFile: (filePath: string) => void;
   selection: CodeSelection | null;
+  threads: ReviewThread[];
 }) {
   const [error, setError] = useState<string | null>(null);
   const [popup, setPopup] = useState<VoicePopup | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const lastToggleAtRef = useRef(0);
   const activeFileRef = useRef<string | null>(activeFile);
+  const activeThreadIdRef = useRef<string | null>(activeThreadId);
   const filesRef = useRef<ChangedFile[]>(files);
   const onAskRef = useRef(onAsk);
+  const onFollowUpRef = useRef(onFollowUp);
   const onNavigateFileRef = useRef(onNavigateFile);
   const selectionRef = useRef<CodeSelection | null>(selection);
+  const threadsRef = useRef<ReviewThread[]>(threads);
   const lastLoggedUserTranscriptRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeFileRef.current = activeFile;
   }, [activeFile]);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
 
   useEffect(() => {
     filesRef.current = files;
@@ -61,12 +74,20 @@ export function VoiceSelectionDemo({
   }, [onAsk]);
 
   useEffect(() => {
+    onFollowUpRef.current = onFollowUp;
+  }, [onFollowUp]);
+
+  useEffect(() => {
     onNavigateFileRef.current = onNavigateFile;
   }, [onNavigateFile]);
 
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
 
   const tools = useMemo(
     () => [
@@ -87,8 +108,23 @@ export function VoiceSelectionDemo({
         },
       }),
       defineVoiceTool({
+        name: "get_review_room_context",
+        description: "Read the current Review Room page context, including selected diff code, selected page text, focused Codex thread, and visible workbench thread summaries. Use this when the user refers to this issue, this thread, the selected text, or what is on the page and the target may be ambiguous.",
+        parameters: z.object({}),
+        execute: () => {
+          const context = buildReviewRoomContext({
+            activeFile: activeFileRef.current,
+            activeThreadId: activeThreadIdRef.current,
+            selection: selectionRef.current,
+            threads: threadsRef.current,
+          });
+          setPopup({ title: "Page context", body: context.popupText });
+          return { ok: true, context };
+        },
+      }),
+      defineVoiceTool({
         name: "ask_general_question",
-        description: "Create a new review workbench thread for a general pull request question or request. Use this when the user asks a substantive question or asks to draw, explain, summarize, review, compare, or generate something, including Mermaid diagrams.",
+        description: "Create a new review workbench thread for a general pull request question or request. Use this when the user asks a substantive question that is not a follow-up about the focused Codex thread. This includes requests to draw, generate, or show a Mermaid diagram.",
         parameters: z.object({
           question: z.string().min(1).describe("The user's question, cleaned up without adding new meaning."),
         }),
@@ -97,6 +133,25 @@ export function VoiceSelectionDemo({
           await onAskRef.current(trimmed);
           setPopup({ title: "Thread started", body: trimmed });
           return { ok: true, question: trimmed };
+        },
+      }),
+      defineVoiceTool({
+        name: "ask_thread_follow_up",
+        description: "Post a follow-up question to the focused Codex workbench thread. Use this when the user asks about the active thread, this issue, that finding, it, the result, or the current Codex thread.",
+        parameters: z.object({
+          question: z.string().min(1).describe("The user's follow-up question, cleaned up without adding new meaning."),
+          threadId: z.string().optional().describe("Specific Review Room thread id only if the user named one or context already identified it."),
+        }),
+        execute: async ({ question, threadId }) => {
+          const resolved = resolveFollowUpThread(threadId, activeThreadIdRef.current, threadsRef.current);
+          if (!resolved.ok) {
+            setPopup({ title: "Choose a thread", body: resolved.message });
+            return resolved;
+          }
+          const trimmed = question.trim();
+          await onFollowUpRef.current(resolved.thread.id, trimmed);
+          setPopup({ title: "Follow-up started", body: `${resolved.thread.title}\n\n${trimmed}` });
+          return { ok: true, threadId: resolved.thread.id, question: trimmed };
         },
       }),
       defineVoiceTool({
@@ -126,7 +181,7 @@ export function VoiceSelectionDemo({
       activationMode: "vad",
       auth: { sessionEndpoint: "/api/realtime/session" },
       instructions:
-        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call ask_general_question when the user asks a substantive review question or request and pass the question. This includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For any unclear, noisy, partial, unrelated, ambiguous audio, or case where no UI action is required, call no_action_required_or_unclear_audio. Do not answer in prose.",
+        "You are controlling a pull request review UI. Call show_selected_text only when the user explicitly asks what text, lines, code, or selection is selected. Call get_review_room_context when the user refers to this issue, this thread, the selected text, the page, or the focused Codex thread and you need current context. Call ask_thread_follow_up when the user asks a follow-up about the active or focused Codex thread, including references like this issue, that finding, it, the result, or the thread. Call ask_general_question when the user asks a substantive new review question or request that is not about the focused thread; this includes requests to draw, generate, or show a Mermaid diagram. Call navigate_file for explicit file navigation requests like next file, previous file, or go to a named file. For unclear, noisy, partial, unrelated, or ambiguous audio where no UI action can be chosen, call no_action_required_or_unclear_audio. Do not answer in prose.",
       onEvent: (event) => {
         logCompletedUserTranscript(event, lastLoggedUserTranscriptRef);
       },
@@ -150,6 +205,7 @@ export function VoiceSelectionDemo({
         }
       },
       outputMode: "tool-only",
+      postToolResponse: true,
       toolChoice: "required",
       tools,
     }),
@@ -328,6 +384,115 @@ type TranscriptEvent = {
   type?: unknown;
   transcript?: unknown;
 };
+
+type ReviewRoomContextInput = {
+  activeFile: string | null;
+  activeThreadId: string | null;
+  selection: CodeSelection | null;
+  threads: ReviewThread[];
+};
+
+export type ReviewRoomVoiceContext = {
+  activeFile: string | null;
+  selectedCode: CodeSelection | null;
+  selectedPageText: string | null;
+  activeThread: ThreadVoiceSummary | null;
+  threads: ThreadVoiceSummary[];
+  popupText: string;
+};
+
+type ThreadVoiceSummary = {
+  id: string;
+  title: string;
+  status: ReviewThread["status"];
+  context: CodeSelection | null;
+  markdownExcerpt: string | null;
+};
+
+export function buildReviewRoomContext({
+  activeFile,
+  activeThreadId,
+  selection,
+  threads,
+}: ReviewRoomContextInput): ReviewRoomVoiceContext {
+  const summaries = threads.map(summarizeThreadForVoice);
+  const activeThread = summaries.find((thread) => thread.id === activeThreadId) ?? null;
+  const selectedPageText = selectedPageTextForVoice();
+  return {
+    activeFile,
+    selectedCode: selection,
+    selectedPageText,
+    activeThread,
+    threads: summaries,
+    popupText: contextPopupText(selection, selectedPageText, activeThread),
+  };
+}
+
+export type FollowUpThreadResolution =
+  | {
+      ok: true;
+      thread: ReviewThread;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+export function resolveFollowUpThread(
+  requestedThreadId: string | undefined,
+  activeThreadId: string | null,
+  threads: ReviewThread[],
+): FollowUpThreadResolution {
+  const threadId = requestedThreadId?.trim() || activeThreadId;
+  if (!threadId) {
+    return { ok: false, message: "Click the relevant Codex thread, then ask the follow-up again." };
+  }
+  const thread = threads.find((candidate) => candidate.id === threadId);
+  if (!thread) {
+    return { ok: false, message: `No workbench thread matches ${threadId}.` };
+  }
+  if (thread.status === "queued" || thread.status === "running") {
+    return { ok: false, message: "That Codex thread is still running. Ask the follow-up when it finishes." };
+  }
+  if (!thread.codex_thread_id) {
+    return { ok: false, message: "That workbench thread is not connected to a Codex thread yet." };
+  }
+  return { ok: true, thread };
+}
+
+function summarizeThreadForVoice(thread: ReviewThread): ThreadVoiceSummary {
+  return {
+    id: thread.id,
+    title: thread.title,
+    status: thread.status,
+    context: thread.context ?? null,
+    markdownExcerpt: thread.markdown ? truncateForVoice(thread.markdown, 1200) : null,
+  };
+}
+
+function selectedPageTextForVoice() {
+  const text = window.getSelection()?.toString().trim() ?? "";
+  return text || null;
+}
+
+function contextPopupText(selection: CodeSelection | null, selectedPageText: string | null, activeThread: ThreadVoiceSummary | null) {
+  const parts = [
+    selection ? selectedLocationMessage(selection) : "No diff code is selected.",
+    activeThread ? `Focused thread: ${activeThread.title}` : "No Codex thread is focused.",
+  ];
+  if (selectedPageText) {
+    parts.push(`Selected page text: ${truncateForVoice(selectedPageText, 240)}`);
+  }
+  return parts.join("\n");
+}
+
+function truncateForVoice(value: string, maxLength: number) {
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}...`;
+}
 
 function logCompletedUserTranscript(event: TranscriptEvent, lastLoggedUserTranscriptRef: MutableRefObject<string | null>) {
   if (event.type !== "conversation.item.input_audio_transcription.completed") {
