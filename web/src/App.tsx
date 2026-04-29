@@ -4,7 +4,7 @@ import { AIWorkbench } from "./components/AIWorkbench";
 import { ChangedFilesPane } from "./components/ChangedFilesPane";
 import { DiffPane } from "./components/DiffPane";
 import { PullRequestPanel } from "./components/PullRequestPanel";
-import type { ChangedFile, CodeSelection, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
+import type { ChangedFile, CodeReference, CodeSelection, PullRequestInfo, ReviewContext, ReviewThread } from "./types";
 
 type LoadState = "booting" | "needs-pr" | "loading" | "ready" | "failed";
 
@@ -24,6 +24,7 @@ export default function App() {
   const [diffError, setDiffError] = useState<string | null>(null);
   const [selection, setSelection] = useState<CodeSelection | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [targetReference, setTargetReference] = useState<CodeReference | null>(null);
   const reviewContextRef = useRef<ReviewContext | null>(null);
 
   const loadReview = useCallback(async (prUrl: string) => {
@@ -167,6 +168,12 @@ export default function App() {
     [],
   );
 
+  const handleNavigateReference = useCallback((reference: CodeReference) => {
+    setActiveFile(reference.filePath);
+    setSelection(null);
+    setTargetReference(reference);
+  }, []);
+
   if (loadState === "booting" || loadState === "loading") {
     return <LoadingScreen label={loadState === "booting" ? "Starting Review Room" : "Loading pull request"} />;
   }
@@ -205,11 +212,18 @@ export default function App() {
           filePath={activeFile}
           diff={activeDiff}
           diffError={diffError}
+          targetReference={targetReference}
           selection={selection}
           onSelectionChange={setSelection}
         />
       </main>
-      <AIWorkbench threads={review.threads} selection={selection} threadError={threadError} onAsk={handleAsk} />
+      <AIWorkbench
+        threads={review.threads}
+        selection={selection}
+        threadError={threadError}
+        onAsk={handleAsk}
+        onNavigateReference={handleNavigateReference}
+      />
     </div>
   );
 }

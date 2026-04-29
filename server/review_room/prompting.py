@@ -39,7 +39,9 @@ Instructions:
 - Focus on the user's exact command or question.
 - Keep the answer as short as the request allows.
 - Be concrete and grounded in the repository.
-- Prefer file:line references, formatted like `src/foo.ts:L42-L68`.
+- When referring to code, use changed-file paths from this PR and wrap file/line references in inline code.
+- Format clickable references exactly like `src/foo.ts:L42` or `src/foo.ts:L42-L68`.
+- Do not use GitHub URLs for file references unless the user explicitly asks for external links.
 - If asked to find tests, search the repository for relevant tests and summarize what they cover.
 - If asked who calls something, search the repository and list relevant call sites.
 - If asked for a diagram, include a fenced Mermaid block plus a short explanation.

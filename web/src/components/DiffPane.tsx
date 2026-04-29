@@ -1,22 +1,36 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { formatSelection, lineNumberForSide, parseUnifiedDiff } from "../lib/diff";
-import type { CodeSelection, DiffLine } from "../types";
+import type { CodeReference, CodeSelection, DiffLine } from "../types";
 import { SelectionChip } from "./SelectionChip";
 
 export function DiffPane({
   filePath,
   diff,
   diffError,
+  targetReference,
   selection,
   onSelectionChange,
 }: {
   filePath: string | null;
   diff: string;
   diffError: string | null;
+  targetReference: CodeReference | null;
   selection: CodeSelection | null;
   onSelectionChange: (selection: CodeSelection) => void;
 }) {
   const lines = useMemo(() => parseUnifiedDiff(diff), [diff]);
+
+  useEffect(() => {
+    if (!filePath || !targetReference || targetReference.filePath !== filePath || lines.length === 0) {
+      return;
+    }
+
+    const selector = `[data-file-path="${cssEscape(filePath)}"][data-new-line="${targetReference.startLine}"], [data-file-path="${cssEscape(
+      filePath,
+    )}"][data-old-line="${targetReference.startLine}"]`;
+    const targetRow = document.querySelector<HTMLElement>(selector);
+    targetRow?.scrollIntoView({ block: "center" });
+  }, [filePath, lines, targetReference]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-[#080a0f]">
@@ -41,7 +55,7 @@ export function DiffPane({
           <table className="w-full table-fixed border-collapse font-mono text-[13px] leading-6">
             <tbody>
               {lines.map((line) => (
-                <DiffRow filePath={filePath} key={line.id} line={line} />
+                <DiffRow filePath={filePath} key={line.id} line={line} targetReference={targetReference} />
               ))}
             </tbody>
           </table>
@@ -51,13 +65,13 @@ export function DiffPane({
   );
 }
 
-function DiffRow({ filePath, line }: { filePath: string; line: DiffLine }) {
+function DiffRow({ filePath, line, targetReference }: { filePath: string; line: DiffLine; targetReference: CodeReference | null }) {
   const oldLine = line.oldLine === null ? "" : line.oldLine;
   const newLine = line.newLine === null ? "" : line.newLine;
 
   return (
     <tr
-      className={rowClass(line.kind)}
+      className={rowClass(line.kind, isTargetLine(filePath, line, targetReference))}
       data-diff-row="true"
       data-file-path={filePath}
       data-new-line={line.newLine ?? ""}
@@ -74,7 +88,10 @@ function DiffRow({ filePath, line }: { filePath: string; line: DiffLine }) {
   );
 }
 
-function rowClass(kind: DiffLine["kind"]) {
+function rowClass(kind: DiffLine["kind"], isTarget: boolean) {
+  if (isTarget) {
+    return "bg-violet-500/25 ring-1 ring-inset ring-violet-400/50";
+  }
   if (kind === "hunk") {
     return "bg-slate-900/80 text-slate-400";
   }
@@ -88,6 +105,24 @@ function rowClass(kind: DiffLine["kind"]) {
     return "text-slate-500";
   }
   return "hover:bg-slate-900/50";
+}
+
+function isTargetLine(filePath: string, line: DiffLine, targetReference: CodeReference | null) {
+  if (!targetReference || targetReference.filePath !== filePath) {
+    return false;
+  }
+  const endLine = targetReference.endLine ?? targetReference.startLine;
+  return (
+    (line.newLine !== null && line.newLine >= targetReference.startLine && line.newLine <= endLine) ||
+    (line.oldLine !== null && line.oldLine >= targetReference.startLine && line.oldLine <= endLine)
+  );
+}
+
+function cssEscape(value: string) {
+  if ("CSS" in window && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
 }
 
 function prefixFor(kind: DiffLine["kind"]) {
@@ -157,4 +192,3 @@ function normalizeRange(start: number | null, end: number | null): [number | nul
   }
   return start <= end ? [start, end] : [end, start];
 }
-

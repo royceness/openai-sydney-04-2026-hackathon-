@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { CodeSelection, ReviewThread } from "../types";
+import type { CodeReference, CodeSelection, ReviewThread } from "../types";
 import { MermaidBlock } from "./MermaidBlock";
 
 export function AIWorkbench({
@@ -8,11 +8,13 @@ export function AIWorkbench({
   selection,
   threadError,
   onAsk,
+  onNavigateReference,
 }: {
   threads: ReviewThread[];
   selection: CodeSelection | null;
   threadError: string | null;
   onAsk: (utterance: string) => Promise<void>;
+  onNavigateReference: (reference: CodeReference) => void;
 }) {
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -142,6 +144,18 @@ export function AIWorkbench({
                               if (language === "mermaid") {
                                 return <MermaidBlock source={source} />;
                               }
+                              const reference = parseCodeReference(source);
+                              if (!className && reference) {
+                                return (
+                                  <button
+                                    className="rounded border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 font-mono text-[0.95em] text-violet-200 hover:border-violet-300 hover:text-violet-100"
+                                    onClick={() => onNavigateReference(reference)}
+                                    type="button"
+                                  >
+                                    {source}
+                                  </button>
+                                );
+                              }
                               return <code className={className}>{children}</code>;
                             },
                           }}
@@ -159,6 +173,28 @@ export function AIWorkbench({
       </div>
     </aside>
   );
+}
+
+export function parseCodeReference(value: string): CodeReference | null {
+  const match = /^(?<filePath>[^:\s][^:\n]*):L(?<startLine>\d+)(?:-L?(?<endLine>\d+))?$/.exec(value.trim());
+  if (!match?.groups) {
+    return null;
+  }
+
+  const startLine = Number.parseInt(match.groups.startLine, 10);
+  const endLineText = match.groups.endLine;
+  const endLine = endLineText ? Number.parseInt(endLineText, 10) : undefined;
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
+    return null;
+  }
+  if (endLine !== undefined && (!Number.isSafeInteger(endLine) || endLine < startLine)) {
+    return null;
+  }
+  return {
+    filePath: match.groups.filePath,
+    startLine,
+    ...(endLine !== undefined ? { endLine } : {}),
+  };
 }
 
 function statusClass(status: ReviewThread["status"]) {

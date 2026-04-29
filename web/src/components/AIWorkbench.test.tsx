@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AIWorkbench } from "./AIWorkbench";
+import { AIWorkbench, parseCodeReference } from "./AIWorkbench";
 
 vi.mock("mermaid", () => ({
   default: {
@@ -23,7 +23,7 @@ describe("AIWorkbench", () => {
 
   it("submits a manual question", async () => {
     const onAsk = vi.fn().mockResolvedValue(undefined);
-    render(<AIWorkbench onAsk={onAsk} selection={null} threadError={null} threads={[]} />);
+    render(<AIWorkbench onAsk={onAsk} onNavigateReference={vi.fn()} selection={null} threadError={null} threads={[]} />);
 
     await userEvent.type(screen.getByPlaceholderText("Ask about selected code..."), "Explain this function");
     await userEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -35,6 +35,7 @@ describe("AIWorkbench", () => {
     render(
       <AIWorkbench
         onAsk={vi.fn()}
+        onNavigateReference={vi.fn()}
         selection={null}
         threadError={null}
         threads={[
@@ -61,6 +62,7 @@ describe("AIWorkbench", () => {
     render(
       <AIWorkbench
         onAsk={vi.fn()}
+        onNavigateReference={vi.fn()}
         selection={null}
         threadError={null}
         threads={[
@@ -97,6 +99,7 @@ describe("AIWorkbench", () => {
     const { rerender } = render(
       <AIWorkbench
         onAsk={vi.fn()}
+        onNavigateReference={vi.fn()}
         selection={null}
         threadError={null}
         threads={[
@@ -119,6 +122,7 @@ describe("AIWorkbench", () => {
     rerender(
       <AIWorkbench
         onAsk={vi.fn()}
+        onNavigateReference={vi.fn()}
         selection={null}
         threadError={null}
         threads={[
@@ -137,5 +141,42 @@ describe("AIWorkbench", () => {
 
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Updated streamed body.")).not.toBeInTheDocument();
+  });
+
+  it("parses clickable code references", () => {
+    expect(parseCodeReference("src/foo.ts:L42")).toEqual({ filePath: "src/foo.ts", startLine: 42 });
+    expect(parseCodeReference("src/foo.ts:L42-L68")).toEqual({ filePath: "src/foo.ts", startLine: 42, endLine: 68 });
+    expect(parseCodeReference("not a reference")).toBeNull();
+  });
+
+  it("navigates when a thread file reference is clicked", async () => {
+    const onNavigateReference = vi.fn();
+    render(
+      <AIWorkbench
+        onAsk={vi.fn()}
+        onNavigateReference={onNavigateReference}
+        selection={null}
+        threadError={null}
+        threads={[
+          {
+            id: "thr_1",
+            source: "manual",
+            title: "Find the issue",
+            status: "complete",
+            markdown: "See `src/review/diagram.ts:L42-L44`.",
+            created_at: "2026-04-29T00:00:00Z",
+            updated_at: "2026-04-29T00:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "src/review/diagram.ts:L42-L44" }));
+
+    expect(onNavigateReference).toHaveBeenCalledWith({
+      filePath: "src/review/diagram.ts",
+      startLine: 42,
+      endLine: 44,
+    });
   });
 });

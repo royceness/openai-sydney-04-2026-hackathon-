@@ -74,6 +74,12 @@ export type CodeSelection = {
   commitSha?: string;
 };
 
+export type CodeReference = {
+  filePath: string;
+  startLine: number;
+  endLine?: number;
+};
+
 export type ReviewContext = {
   reviewId: string;
   pr: PullRequestInfo;

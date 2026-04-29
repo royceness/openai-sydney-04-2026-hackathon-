@@ -47,6 +47,7 @@ def test_build_review_prompt_includes_pr_and_selection_context() -> None:
     assert "- selected lines: 201-208" in prompt
     assert "```ts\nedge.points = simplify(path)\n```" in prompt
     assert "include a fenced Mermaid block" in prompt
+    assert "Format clickable references exactly like `src/foo.ts:L42` or `src/foo.ts:L42-L68`." in prompt
 
 
 def test_build_review_prompt_treats_pr_as_context_not_general_review_instruction() -> None:
