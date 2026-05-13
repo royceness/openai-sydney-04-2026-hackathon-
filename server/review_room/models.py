@@ -87,6 +87,18 @@ class ReviewSubmission(BaseModel):
     github_review_url: str | None = None
 
 
+class TestRun(BaseModel):
+    id: str
+    status: Literal["queued", "running", "passed", "failed"]
+    command: str
+    exit_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class ReviewSession(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -96,6 +108,7 @@ class ReviewSession(BaseModel):
     threads: list[ReviewThread] = Field(default_factory=list)
     comments: list[DraftComment] = Field(default_factory=list)
     submission: ReviewSubmission = Field(default_factory=ReviewSubmission)
+    test_runs: list[TestRun] = Field(default_factory=list)
     repo_path: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -108,6 +121,7 @@ class CreateReviewResponse(BaseModel):
     threads: list[ReviewThread]
     comments: list[DraftComment] = Field(default_factory=list)
     submission: ReviewSubmission = Field(default_factory=ReviewSubmission)
+    test_runs: list[TestRun] = Field(default_factory=list)
 
 
 class FileDiffResponse(BaseModel):

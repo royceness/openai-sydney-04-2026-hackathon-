@@ -36,6 +36,18 @@ export type ReviewThread = {
   updated_at: string;
 };
 
+export type TestRun = {
+  id: string;
+  status: "queued" | "running" | "passed" | "failed";
+  command: string;
+  exit_code?: number | null;
+  stdout: string;
+  stderr: string;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ReviewSession = {
   id: string;
   pr: PullRequestInfo;
@@ -43,6 +55,7 @@ export type ReviewSession = {
   threads: ReviewThread[];
   comments: DraftComment[];
   submission: ReviewSubmission;
+  test_runs: TestRun[];
   repo_path?: string | null;
   created_at: string;
   updated_at: string;
@@ -55,6 +68,7 @@ export type CreateReviewResponse = {
   threads: ReviewThread[];
   comments: DraftComment[];
   submission: ReviewSubmission;
+  test_runs: TestRun[];
 };
 
 export type FileDiffResponse = {
